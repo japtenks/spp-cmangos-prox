@@ -63,6 +63,7 @@ if [[ ! -f $CONFIG_FILE ]]; then
   cat <<EOF > "$CONFIG_FILE"
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk")
 INSTALLED_EXPANSIONS=()
+AUTO_START="0"   # 0 = manual, 1 = auto-enable
 
 DB_HOST=""
 DB_ROOT_PASS="$DB_ROOT_PASS"
@@ -254,6 +255,19 @@ derive_db_names() {
   CHAR_DB_NAME="${DB_KEY}characters"
   REALM_DB_NAME="${DB_KEY}realmd"
   LOG_DB_NAME="${DB_KEY}logs"
+  
+  case "$EXPANSION" in
+  classic) INSTALL_DIR="/srv/mangos-classic" ;;
+  tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+  wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+  *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
+esac
+case "$EXPANSION" in
+  classic) REALM_ID=1 ;;
+  tbc)     REALM_ID=2 ;;
+  wotlk)   REALM_ID=3 ;;
+  *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
+esac
 }
 
 write_version() {
@@ -318,6 +332,130 @@ install_locales() {
   "
 }
 
+fix_realm_entry() {
+if [[ -z "${EXPANSION:-}" ]]; then
+  echo "Select expansion:"
+  select EXP in classic tbc wotlk; do
+    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+  done
+fi
+
+  derive_db_names || return 1
+
+  LOGIN_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+
+  pct exec "$DB_CTID" -- bash -c "
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+  mariadb -u root ${REALM_DB_NAME} -e \"
+    DELETE FROM realmlist WHERE id=${REALM_ID};
+    INSERT INTO realmlist
+    (id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
+    VALUES
+    (${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
+  \"
+  "
+
+}
+
+update_db_conf() {
+if [[ -z "${EXPANSION:-}" ]]; then
+  echo "Select expansion:"
+  select EXP in classic tbc wotlk; do
+    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+  done
+fi
+  derive_db_names || return 1
+
+  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+
+  # Update realmd.conf (login LXC)
+  pct exec "$LOGIN_CTID" -- bash -c "
+  sed -i \
+  's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+  ${INSTALL_DIR}/etc/realmd.conf
+  "
+
+  # Update mangosd.conf (game LXC)
+  pct exec "$GAME_CTID" -- bash -c "
+  sed -i \
+  -e 's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+  -e 's|^WorldDatabaseInfo *=.*|WorldDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+  -e 's|^CharacterDatabaseInfo *=.*|CharacterDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+  -e 's|^LogsDatabaseInfo *=.*|LogsDatabaseInfo      = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+  ${INSTALL_DIR}/etc/mangosd.conf
+  "
+
+}
+
+full_install() {
+
+  derive_db_names || return 1
+  
+  echo
+  echo "  FULL INSTALL will:"
+  echo " - Stop services"
+  echo " - Delete $INSTALL_DIR"
+  echo " - Drop ALL ${EXPANSION} databases"
+  echo " - Remove source + build files"
+  echo
+  read -p "Type YES to continue: " CONFIRM
+
+  if [[ "$CONFIRM" != "YES" ]]; then
+    echo "Aborted."
+    return 1
+  fi
+
+
+
+  echo "Stopping services..."
+  pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
+  pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
+
+  echo "Removing old install directory..."
+  pct exec "$GAME_CTID" -- rm -rf "$INSTALL_DIR"
+
+  echo "Removing old build + source..."
+  pct exec "$GAME_CTID" -- rm -rf /opt/source /opt/spp-settings
+
+  echo "Removing version trackers..."
+  rm -f "${EXPANSION}_core_version.spp"
+  rm -f "${EXPANSION}_world_version.spp"
+  rm -f "${EXPANSION}_logs_version.spp"
+
+  echo "Dropping databases..."
+  pct exec "$DB_CTID" -- bash -c "
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${WORLD_DB};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${CHAR_DB_NAME};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${REALM_DB_NAME};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${LOG_DB_NAME};\"
+  "
+  
+  comp_server
+  install_db
+  update_maps
+  service_create
+  
+}
+
+create_lan_db_user() {
+  derive_db_names || return 1
+
+  pct exec "$DB_CTID" -- bash -c "
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+  mariadb -u root -e \"
+  CREATE USER IF NOT EXISTS '${DB_LAN_USER}'@'${DB_LAN_HOST}' IDENTIFIED BY '${DB_LAN_PASS}';
+  GRANT ALL PRIVILEGES ON ${WORLD_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+  GRANT ALL PRIVILEGES ON ${CHAR_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+  GRANT ALL PRIVILEGES ON ${REALM_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+  GRANT ALL PRIVILEGES ON ${LOG_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+  FLUSH PRIVILEGES;
+  \"
+  "
+}
+
 install_db() {
   derive_db_names || return 1
   echo "Installing full DB..."
@@ -325,7 +463,8 @@ install_db() {
   install_realm
   install_char
   install_logs
-
+  create_lan_db_user
+  fix_realm_entry
   echo "DB install complete."
 }
 
@@ -454,7 +593,8 @@ install_char() {
  
   export MYSQL_PWD='${DB_ROOT_PASS}'
 
-  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+  WORLD_DB=\"${WORLD_DB}\"
   CHAR_DB=\"${CHAR_DB_NAME}\"
 
   mariadb -u root < \"\$BASE/drop_characters.sql\"
@@ -470,6 +610,17 @@ install_char() {
   for f in \"\$BASE/characters\"/*.sql; do
     [ -f \"\$f\" ] && mariadb -u root \"\$CHAR_DB\" < \"\$f\"
   done
+  
+    mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_travel_nodes.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_texts.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_named_location.sql\"
+  cd \"\$BASE/playerbot\"
+  7z x -y characters_ai_playerbot_equip_cache.7z >/dev/null
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_equip_cache.sql
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rnditem_cache.sql
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rarity_cache.sql
+
+  rm -f characters_ai_playerbot_equip_cache.sql
   "; then
     echo "DB installed successfully."
   else
@@ -511,13 +662,16 @@ reset_characters() {
 }
 
 update_maps() {
-  URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${EXPANSION}.7z"
+  derive_db_names || return 1
+  URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${MAP_KEY}.7z"
 
   pct exec "$GAME_CTID" -- bash -c "
     set -euo pipefail
-    cd /srv
-    mkdir -p mangos/data
-    cd /srv/mangos/data
+INSTALL_DIR="/srv/mangos-${EXPANSION}"
+
+cd "$INSTALL_DIR"
+mkdir -p data
+cd data
 
     echo 'Downloading map package...'
     wget -c --show-progress --no-check-certificate \"$URL\" -O ${EXPANSION}.7z
@@ -558,18 +712,35 @@ case "$EXPANSION" in
 esac
 
 pct exec "$GAME_CTID" -- bash -c "
-mkdir -p /opt &&
-cd /opt &&
-git clone $REPO source &&
-cd source &&
-git checkout ike3-bots &&
-mkdir -p src/modules &&
-cd src/modules &&
-git clone https://github.com/cmangos/playerbots.git playerbot
+set -e
+
+cd /opt
+
+if [[ -d source ]]; then
+  echo 'Updating existing core...'
+  cd source
+  git fetch
+  git checkout ike3-bots
+  git pull
+
+cd src/modules/PlayerBots
+git fetch
+git checkout master
+git pull
+else
+  echo 'Cloning fresh core...'
+  git clone $REPO source
+  cd source
+  git checkout ike3-bots
+
+  mkdir -p src/modules
+  cd src/modules
+  git clone https://github.com/cmangos/playerbots.git PlayerBots
+fi
 "
 pct exec "$GAME_CTID" -- bash -c "
 cd /opt/source &&
-mkdir build &&
+mkdir -p build &&
 cd build &&
 cmake .. \
   -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
@@ -592,14 +763,144 @@ cmake .. \
 make -j\$(nproc) &&
 make install
 "
+
 CORE_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --abbrev-ref HEAD)
 CORE_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --short HEAD)
 BUILD_DATE=$(date +%F_%H:%M)
+BOT_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --abbrev-ref HEAD)
+BOT_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --short HEAD)
 
 KEY=$(echo "$EXPANSION" | tr '[:lower:]' '[:upper:]')
 EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]}"
 write_version "${EXPANSION}_core_version.spp" \
-"${EXPECTED_CORE}|${CORE_BRANCH}|${CORE_COMMIT}|${BUILD_DATE}"
+"${EXPECTED_CORE}|${CORE_BRANCH}|${CORE_COMMIT}|${BOT_BRANCH}|${BOT_COMMIT}|${BUILD_DATE}"
+
+pct exec "$GAME_CTID" -- bash -c "
+set -e
+cd /opt
+rm -rf spp-settings
+git clone --depth 1 --filter=blob:none --sparse https://github.com/japtenks/spp-cmangos-prox.git spp-settings
+cd spp-settings
+git sparse-checkout set Settings/${MAP_KEY}
+
+CONF_DIR=\"Settings/${MAP_KEY}\"
+cp -f \$CONF_DIR/*.conf $INSTALL_DIR/etc/
+"
+# ----------------------------
+# Deploy realmd to Login LXC
+# ----------------------------
+
+# Create dirs on login container
+pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/bin"
+pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/etc"
+
+# Copy realmd binary + default config
+if ! pct exec "$GAME_CTID" -- test -f "$INSTALL_DIR/bin/realmd"; then
+  echo "ERROR: realmd binary not found in $INSTALL_DIR on game container."
+  return 1
+fi
+
+# Copy realmd binary from installed core
+pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR" -cf - bin/realmd | \
+pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR" -xf -
+
+# Copy realmd.conf from SPP repo
+pct exec "$GAME_CTID" -- tar -C "/opt/spp-settings/Settings/${MAP_KEY}" -cf - realmd.conf | \
+pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR/etc" -xf -
+
+# Create realmd.conf if missing
+pct exec "$LOGIN_CTID" -- bash -c "
+cd $INSTALL_DIR/etc
+if [[ ! -f realmd.conf ]]; then
+  cp realmd.conf.dist realmd.conf
+fi
+"
+update_db_conf
+}
+
+service_create() {
+if [[ -z "${EXPANSION:-}" ]]; then
+  echo "Select expansion:"
+  select EXP in classic tbc wotlk; do
+    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+  done
+fi
+derive_db_names
+
+  # realmd
+  pct exec "$LOGIN_CTID" -- bash -c "
+cat > /etc/systemd/system/realmd.service <<EOF
+[Unit]
+Description=CMaNGOS Realmd
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/bin/realmd -c $INSTALL_DIR/etc/realmd.conf
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+"
+
+  pct exec "$LOGIN_CTID" -- systemctl daemon-reload
+
+  # mangosd
+  pct exec "$GAME_CTID" -- bash -c "
+cat > /etc/systemd/system/mangosd.service <<EOF
+[Unit]
+Description=CMaNGOS World Server
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/bin/mangosd -c $INSTALL_DIR/etc/mangosd.conf
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+"
+
+  pct exec "$GAME_CTID" -- systemctl daemon-reload
+
+
+apply_autostart_setting
+}
+
+apply_autostart_setting() {
+
+  if [[ "$AUTO_START" == "1" ]]; then
+    pct exec "$LOGIN_CTID" -- systemctl enable realmd
+    pct exec "$GAME_CTID" -- systemctl enable mangosd
+    echo "Autostart ENABLED"
+  else
+    pct exec "$LOGIN_CTID" -- systemctl disable realmd
+    pct exec "$GAME_CTID" -- systemctl disable mangosd
+    echo "Autostart DISABLED"
+  fi
+}
+
+toggle_autostart() {
+
+  if [[ "$AUTO_START" == "1" ]]; then
+    AUTO_START="0"
+  else
+    AUTO_START="1"
+  fi
+
+  # update config.env
+  sed -i "s/^AUTO_START=.*/AUTO_START=\"$AUTO_START\"/" "$CONFIG_FILE"
+
+  apply_autostart_setting
+
+  echo "AUTO_START is now: $AUTO_START"
 }
 
 get_status() {
@@ -675,17 +976,20 @@ connect_ra() {
 }
 
 start_stack() {
+
+  # Start containers if needed
   for CT in "$DB_CTID" "$WEB_CTID" "$LOGIN_CTID" "$GAME_CTID"; do
     STATE=$(pct status "$CT" | awk '{print $2}')
-
     if [[ "$STATE" != "running" ]]; then
-      NAME=$(pct config "$CT" | awk -F': ' '/hostname/ {print $2}')
-      echo "Starting $NAME ($CT)..."
       pct start "$CT"
-    else
-      :
     fi
   done
+
+  # Start services explicitly
+  pct exec "$DB_CTID" -- systemctl start mariadb
+  pct exec "$LOGIN_CTID" -- systemctl start realmd
+  pct exec "$WEB_CTID" -- systemctl start apache2
+  pct exec "$GAME_CTID" -- systemctl start mangosd
 
 }
 
@@ -700,9 +1004,7 @@ stop_world() {
 }
 
 stat_state() {
-  STATE=$(pct status "$GAME_CTID" | awk '{print $2}')
-
-  if [[ "$STATE" == "running" ]]; then
+  if pct exec "$GAME_CTID" -- systemctl is-active --quiet mangosd 2>/dev/null; then
     STACK_STATUS="Running"
     STACK_ACTION="Stop World"
   else
@@ -713,70 +1015,112 @@ stat_state() {
 
 print_banner() {
 
-local EXP="${EXPANSION:-}"
+  local EXP="${EXPANSION:-main}"
 
-  case "${EXPANSION:-}" in
-    classic) COLOR="\e[33m" ;;   # yellow
-    tbc)     COLOR="\e[32m" ;;   # green
-    wotlk)   COLOR="\e[36m" ;;   # cyan
-    *)       COLOR="\e[0m" ;;
+  case "$EXP" in
+    tbc)
+      COLOR="\e[32m"
+      LOGO="
+          ______  ___    _____
+          /_  __/ / _ )  / ___/
+           / /   / _  | / /__
+          /_/   /____/  \___/
+"
+      ;;
+    classic)
+      COLOR="\e[33m"
+      LOGO="
+     _   __          _ ____
+    | | / /__ ____  (_) / /__ _
+    | |/ / _ \`/ _ \/ / / / _ \`/
+    |___/\_,_/_//_/_/_/_/\_,_/
+"
+      ;;
+    wotlk)
+      COLOR="\e[36m"
+      LOGO="
+     _      __     __  __   __ __
+    | | /| / /__  / /_/ /  / //_/
+    | |/ |/ / _ \/ __/ /__/ ,<
+    |__/|__/\___/\__/____/_/|_|
+"
+      ;;
+    *)
+      COLOR="\e[0m"
+      LOGO="
+   ____  ____  ____
+  / ___||  _ \|  _ \\
+  \___ \| |_) | |_) |
+   ___) |  __/|  __/
+  |____/|_|   |_|    
+"
+      ;;
   esac
 
   CLEAR="\e[0m"
-
   clear
-  echo -e "${COLOR}"
+  echo -e "$COLOR"
   echo "########################################"
-  echo "# SPP - ${EXPANSION^}"
-  echo "# https://www.singleplayerproject.com/"
+  echo "# SPP - ${EXP^}"
   echo "########################################"
   echo
-  echo "   ____  ____  ____"
-  echo "  / ___||  _ \|  _ \\"
-  echo "  \___ \| |_) | |_) |"
-  echo "   ___) |  __/|  __/"
-  echo "  |____/|_|   |_|"
-  echo -e "${CLEAR}"
- 
-
+  echo -e "$LOGO"
+  echo -e "$CLEAR"
 }
 
 print_version() {
 
-  KEY=$(echo "$EXPANSION" | tr '[:lower:]' '[:upper:]')
+  CORE_RAW=$(get_live_version "/opt/${EXPANSION}_core_version.spp")
+  IFS='|' read -r CORE_VER CORE_BRANCH CORE_COMMIT BOT_BRANCH BOT_COMMIT BUILD_DATE <<< "$CORE_RAW"
 
-CORE=$(get_live_version "/opt/${EXPANSION}_core_version.spp")
-WORLD=$(get_live_version "/opt/${EXPANSION}_world_version.spp")
-CHARS=$(get_live_version "/opt/${EXPANSION}_chars_version.spp")
-REALM=$(get_live_version "/opt/${EXPANSION}_realm_version.spp")
-LOGS=$(get_live_version "/opt/${EXPANSION}_logs_version.spp")
-BOTS=$(get_live_version "/opt/${EXPANSION}_bots_version.spp")
-WEB=$(get_live_version "/opt/${EXPANSION}_website_version.spp")
-MAPS=$(get_live_version "/opt/${EXPANSION}_maps_version.spp")
+  WORLD_RAW=$(get_live_version "/opt/${EXPANSION}_world_version.spp")
+  IFS='|' read -r WORLD_VER _ <<< "$WORLD_RAW"
 
+  CHARS_RAW=$(get_live_version "/opt/${EXPANSION}_chars_version.spp")
+  IFS='|' read -r CHARS_VER _ <<< "$CHARS_RAW"
 
-  case "$EXPANSION" in
-    classic) COLOR="\e[33m" ;;   # yellow
-    tbc)     COLOR="\e[32m" ;;   # green
-    wotlk)   COLOR="\e[36m" ;;   # cyan
-    *)       COLOR="\e[0m" ;;
-  esac
-  CLEAR="\e[0m"
-  echo -e "${COLOR}"
-  echo "Ver: Core: $CORE  World: $WORLD  Chars: $CHARS  Realm: $REALM  Logs: $LOGS  Bots: $BOTS  Web: $WEB  Maps: $MAPS"
-  echo -e "${CLEAR}"
-  echo
+  REALM_RAW=$(get_live_version "/opt/${EXPANSION}_realm_version.spp")
+  IFS='|' read -r REALM_VER _ <<< "$REALM_RAW"
 
+  LOGS_RAW=$(get_live_version "/opt/${EXPANSION}_logs_version.spp")
+  IFS='|' read -r LOGS_VER _ <<< "$LOGS_RAW"
+
+  MAPS_RAW=$(get_live_version "/opt/${EXPANSION}_maps_version.spp")
+  IFS='|' read -r MAPS_VER _ <<< "$MAPS_RAW"
+
+  GREEN="\e[32m"
+  RED="\e[31m"
+  YELLOW="\e[33m"
+  RESET="\e[0m"
+
+  EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]:-}"
+  EXPECTED_WORLD="${VERSION_MAP[$EXPANSION:WORLD]:-}"
+
+  [[ "$CORE_VER" == "$EXPECTED_CORE" ]] && CORE_COLOR=$GREEN || CORE_COLOR=$RED
+  [[ "$WORLD_VER" == "$EXPECTED_WORLD" ]] && WORLD_COLOR=$GREEN || WORLD_COLOR=$RED
+
+  echo -e "Core: ${CORE_COLOR}v${CORE_VER:-NA}${RESET} (${CORE_BRANCH:-?}@${CORE_COMMIT:-?})"
+  echo -e "Bots: ${YELLOW}${BOT_BRANCH:-?}@${BOT_COMMIT:-?}${RESET}"
+  echo "Built: ${BUILD_DATE:-unknown}"
+  echo -e "World: ${WORLD_COLOR}${WORLD_VER:-NA}${RESET}"
+  echo "Chars: ${CHARS_VER:-NA}  Realm: ${REALM_VER:-NA}  Logs: ${LOGS_VER:-NA}  Maps: ${MAPS_VER:-NA}"
 }
 
 get_live_version() {
   local FILE=$1
 
-  if [[ -f "$FILE" ]]; then
-    cat "$FILE"
-  else
-    echo "NOT INSTALLED"
-  fi
+  pct exec "$DB_CTID" -- bash -c "
+    if [[ -f '$FILE' ]]; then
+      cat '$FILE'
+    else
+      echo NOT_INSTALLED
+    fi
+  " 2>/dev/null || echo NOT_INSTALLED
+}
+
+live_logs() {
+  echo "Press Ctrl+C to exit live view."
+  pct exec "$GAME_CTID" -- journalctl -u mangosd -f --no-pager
 }
 
 shared_services_menu() {
@@ -791,6 +1135,10 @@ shared_services_menu() {
     echo "5 - Stop Login"
     echo "6 - Start Web"
     echo "7 - Stop Web"
+    echo "u - update_db_conf()"
+    echo "f - fix_realm_entry()"
+    echo "s - service_create()"
+    echo 
     echo "0 - Back"
     echo
 
@@ -812,6 +1160,14 @@ shared_services_menu() {
       5) pct stop "$LOGIN_CTID" ;;
       6) pct start "$WEB_CTID" ;;
       7) pct stop "$WEB_CTID" ;;
+	  u) 
+	  echo "# Update mangosd.conf (game LXC)"
+      echo "# Update realmd.conf (login LXC)"
+         update_db_conf ;;
+	  f) echo "# Update realmlist (db LXC)"
+         fix_realm_entry ;;
+	  s) echo "# Login/Game LXC) systemd creations"
+         service_create ;;
       0) break ;;
     esac
   done
@@ -933,7 +1289,9 @@ fi
     echo "2 - Maintenance"
 	echo
     echo "4 - Remote Console (RA)"
+	echo "5 - Live World Log"
 	echo
+	echo "6 - Autostart ($AUTO_START)"
     echo "0 - Expansion Select"
     echo
 
@@ -977,6 +1335,8 @@ fi
           echo "1 - Core"
           echo "2 - Database"
           echo "3 - Update Maps"
+		  echo
+		  echo "I - (Re)Install Full"
           echo "0 - Back"
           echo
 
@@ -1014,6 +1374,7 @@ fi
                       make install
                     "
                     ;;
+				 
                   0)
                     break
 					;;
@@ -1054,7 +1415,9 @@ fi
             3)
               update_maps
               ;;
-
+            I)
+			full_install
+			  ;;
             0)
               break
               ;;
@@ -1065,6 +1428,9 @@ fi
       4)
         connect_ra
         ;;
+5)
+  live_logs
+  ;;
 
       0)
         break   # returns to expansion selection

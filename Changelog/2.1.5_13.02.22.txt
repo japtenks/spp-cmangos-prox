@@ -1,6 +1,0 @@
-
-                      Update 02.02.2022
-
- - [Core] Vanilla core update
- - [Core] Vanilla solocraft module
- - Other fixes

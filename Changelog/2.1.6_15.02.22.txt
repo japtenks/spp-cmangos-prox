@@ -1,6 +1,0 @@
-
-                      Update 15.02.2022
-
- - [Core] Wotlk core stability fixes
- - [Bots] TBC: Warriors use rampage
- - Other fixes

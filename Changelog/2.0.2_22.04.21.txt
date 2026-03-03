@@ -1,4 +1,0 @@
-
-                      Update 22.04.2021
-
- - [Wotlk] Fix bots not confirming in LFG
