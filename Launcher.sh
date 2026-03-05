@@ -826,33 +826,6 @@ fi
 update_db_conf
 }
 
-fix_realm_entry() {
-if [[ -z "${EXPANSION:-}" ]]; then
-  echo "Select expansion:"
-  select EXP in classic tbc wotlk; do
-    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-  done
-fi
-
-  derive_db_names || return 1
-
-  LOGIN_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
-
-  pct exec "$DB_CTID" -- bash -c "
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-  mariadb -u root ${REALM_DB_NAME} -e \"
-    DELETE FROM realmlist WHERE id=${REALM_ID};
-    INSERT INTO realmlist
-    (id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
-    VALUES
-    (${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
-  \"
-  "
-
-}
-
-
 
 
 create_lan_db_user() {
@@ -874,61 +847,8 @@ create_lan_db_user() {
   "
 }
 
-service_create() {
-if [[ -z "${EXPANSION:-}" ]]; then
-  echo "Select expansion:"
-  select EXP in classic tbc wotlk; do
-    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-  done
-fi
-derive_db_names
-
-  # realmd
-  pct exec "$LOGIN_CTID" -- bash -c "
-cat > /etc/systemd/system/realmd.service <<EOF
-[Unit]
-Description=CMaNGOS Realmd
-After=network.target mariadb.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/bin/realmd -c $INSTALL_DIR/etc/realmd.conf
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-"
-
-  pct exec "$LOGIN_CTID" -- systemctl daemon-reload
-
-  # mangosd
-  pct exec "$GAME_CTID" -- bash -c "
-cat > /etc/systemd/system/mangosd.service <<EOF
-[Unit]
-Description=CMaNGOS World Server
-After=network.target mariadb.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/bin/mangosd -c $INSTALL_DIR/etc/mangosd.conf
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-"
-
-  pct exec "$GAME_CTID" -- systemctl daemon-reload
 
 
-apply_autostart_setting
-}
 
 apply_autostart_setting() {
 [[ -z "$LOGIN_CTID" ]] && auto_detect_stack
@@ -1275,106 +1195,146 @@ expansion_menu() {
   done
 }
 shared_services_menu() {
-auto_detect_stack
+  auto_detect_stack
+
   while true; do
     print_banner
-	echo
+    echo
     echo "Shared Services"
     echo
     echo "1 - Status"
-    echo "2 - DB Start DB"
-    echo "3 - DB Stop DB"
-    echo "4 - RD Start Login"
-    echo "5 - RD Stop Login"
-    echo "6 - W Start Web"
-    echo "7 - W Stop Web"
-    echo "8 - W Install Website"
-	echo "9 - W Update Website"
-	echo "r - DB Sync Sql Repo"	
-	echo "ur - update from Repo"	
-    echo "u - update_db_conf()"
-    echo "f - fix_realm_entry()"
-    echo "s - service_create()"
-    echo 
+    echo "2 - Service Control"
+    echo "3 - Website"
+    echo "4 - Repo"
+    echo "5 - Configuration"
+    echo
     echo "0 - Back"
     echo
 
     read -p "Selection: " SS
 
     case "$SS" in
-      1)
-        for CT in "$DB_CTID" "$LOGIN_CTID" "$WEB_CTID"; do
-          NAME=$(pct config "$CT" | awk -F': ' '/hostname/ {print $2}')
-          echo
-          echo "$NAME ($CT)"
-          pct status "$CT"
-          pct exec "$CT" -- uptime
-        done
-        ;;
-      2) pct start "$DB_CTID" ;;
-      3) pct stop "$DB_CTID" ;;
-      4) pct start "$LOGIN_CTID" ;;
-      5) pct stop "$LOGIN_CTID" ;;
-      6) pct start "$WEB_CTID" ;;
-      7) pct stop "$WEB_CTID" ;;
-	  8) install_website ;;
-	  9) update_website ;;
-	  r) 
-	    read -p "Confirm reset? (YES): " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && sync_sql_repo ;;
-	 ur) 
-	 	read -p "Confirm update? (YES): " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && update_repo
-	  u) 
-	  echo "# Update mangosd.conf (game LXC)"
-      echo "# Update realmd.conf (login LXC)"
-         update_db_conf ;;
-	  f) echo "# Update realmlist (db LXC)"
-         fix_realm_entry ;;
-	  s) echo "# Login/Game LXC) systemd creations"
-         service_create ;;
+      1) shared_status_menu ;;
+      2) shared_service_control_menu ;;
+      3) shared_website_menu ;;
+      4) shared_repo_menu ;;
+      5) shared_config_menu ;;
       0) break ;;
     esac
   done
 }
+
+shared_status_menu() {
+  for CT in "$DB_CTID" "$LOGIN_CTID" "$WEB_CTID"; do
+    NAME=$(pct config "$CT" | awk -F': ' '/hostname/ {print $2}')
+    echo
+    echo "$NAME ($CT)"
+    pct status "$CT"
+    pct exec "$CT" -- uptime
+  done
+  read -p "Press Enter..."
+}
+shared_service_control_menu() {
+  echo
+  echo "Service Control"
+  echo
+  echo "1 - Start DB"
+  echo "2 - Stop DB"
+  echo "3 - Start Login"
+  echo "4 - Stop Login"
+  echo "5 - Start Web"
+  echo "6 - Stop Web"
+  echo
+  echo "0 - Back"
+
+  read -p "Selection: " SC
+
+  case "$SC" in
+    1) pct start "$DB_CTID" ;;
+    2) pct stop "$DB_CTID" ;;
+    3) pct start "$LOGIN_CTID" ;;
+    4) pct stop "$LOGIN_CTID" ;;
+    5) pct start "$WEB_CTID" ;;
+    6) pct stop "$WEB_CTID" ;;
+  esac
+}
+
+
+shared_repo_menu() {
+  echo
+  echo "Repository"
+  echo
+  echo "1 - Reset SQL Repo"
+  echo "2 - Update Repo"
+  echo
+  echo "0 - Back"
+
+  read -p "Selection: " R
+
+  case "$R" in
+    1)
+      read -p "Confirm reset? (YES): " CONFIRM
+      [[ "$CONFIRM" == "YES" ]] && sync_sql_repo
+      ;;
+    2)
+      read -p "Confirm update? (YES): " CONFIRM
+      [[ "$CONFIRM" == "YES" ]] && update_repo
+      ;;
+  esac
+}
+
 sync_sql_repo() {
   pct exec "$DB_CTID" -- bash -c "
     set -e
     cd /opt
     rm -rf spp-sql
-    git clone --depth 1 --filter=blob:none --sparse \
-      https://github.com/japtenks/spp-cmangos-prox.git spp-sql
-    cd spp-sql
-    git sparse-checkout set sql/${MAP_KEY}
+
+    git clone --depth 1 https://github.com/japtenks/spp-cmangos-prox.git spp-sql
   "
 }
 update_sql_repo() {
   pct exec "$DB_CTID" -- bash -c "
     set -e
-    cd /opt/spp-sql
-    git fetch --all
-    git reset --hard origin/main
-    git sparse-checkout set sql/${MAP_KEY}
+    cd /opt/spp-sql || exit 0
+cd /opt/spp-sql
+git fetch --depth 1 origin
+git reset --hard origin/HEAD
   "
 }
 update_settings_repo() {
-  pct exec "$GAME_CTID" -- bash -c "
-    set -e
-    cd /opt/spp-settings
-    git fetch --all
-    git reset --hard origin/main
-    git sparse-checkout set Settings/${MAP_KEY}
-  "
-}
-update_repo() {
-
-  update_sql_repo
-
   for EXP in "${!GAME_CTIDS[@]}"; do
     GAME_CTID="${GAME_CTIDS[$EXP]}"
-    MAP_KEY="$EXP"
-    update_settings_repo
+
+    pct exec "$GAME_CTID" -- bash -c "
+      set -e
+cd /opt/spp-sql
+git fetch --depth 1 origin
+git reset --hard origin/HEAD
+    "
   done
+}
+update_repo() {
+  update_sql_repo
+  update_settings_repo
+}
+
+shared_config_menu() {
+  echo
+  echo "Configuration"
+  echo
+  echo "1 - Correct Server Confs"
+  echo "2 - Fix Realmlist"
+  echo "3 - Create Services"
+  echo
+  echo "0 - Back"
+
+  read -p "Selection: " C
+
+  case "$C" in
+    1) update_db_conf ;;
+    2) fix_realm_entry ;;
+    3) service_create ;;
+  esac
 }
 update_db_conf() {
 if [[ -z "${EXPANSION:-}" ]]; then
@@ -1409,39 +1369,107 @@ for EXP in "${!GAME_CTIDS[@]}"; do
   "
 done
 }
+service_create() {
+if [[ -z "${EXPANSION:-}" ]]; then
+  echo "Select expansion:"
+  select EXP in classic tbc wotlk; do
+    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+  done
+fi
+derive_db_names
+
+  # realmd
+  pct exec "$LOGIN_CTID" -- bash -c "
+cat > /etc/systemd/system/realmd.service <<EOF
+[Unit]
+Description=CMaNGOS Realmd
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/bin/realmd -c $INSTALL_DIR/etc/realmd.conf
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+"
+
+  pct exec "$LOGIN_CTID" -- systemctl daemon-reload
+
+  # mangosd
+  pct exec "$GAME_CTID" -- bash -c "
+cat > /etc/systemd/system/mangosd.service <<EOF
+[Unit]
+Description=CMaNGOS World Server
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/bin/mangosd -c $INSTALL_DIR/etc/mangosd.conf
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+"
+
+  pct exec "$GAME_CTID" -- systemctl daemon-reload
 
 
+apply_autostart_setting
+}
+fix_realm_entry() {
+if [[ -z "${EXPANSION:-}" ]]; then
+  echo "Select expansion:"
+  select EXP in classic tbc wotlk; do
+    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+  done
+fi
 
+  derive_db_names || return 1
 
-install_website_spp() {
+  LOGIN_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
 
-  echo
-  echo "Installing SPP Website..."
-  echo
+  pct exec "$DB_CTID" -- bash -c "
+  export MYSQL_PWD='${DB_ROOT_PASS}'
 
-  pct exec "$WEB_CTID" -- bash -c "
-  set -e
-  cd /opt
-
-  echo 'Downloading website package...'
-  wget -O website.7z https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/website.7z
-
-  echo 'Extracting...'
-  rm -rf /var/www/html/*
-  7z x -y website.7z -o/var/www/html >/dev/null
-
-  chown -R www-data:www-data /var/www/html
-  chmod -R 755 /var/www/html
-
-  a2enmod rewrite >/dev/null 2>&1 || true
-  systemctl restart apache2
+  mariadb -u root ${REALM_DB_NAME} -e \"
+    DELETE FROM realmlist WHERE id=${REALM_ID};
+    INSERT INTO realmlist
+    (id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
+    VALUES
+    (${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
+  \"
   "
 
-  echo
-  echo "Website installed."
-  read -p "Press Enter to continue..."
 }
 
+
+
+
+
+shared_website_menu() {
+  echo
+  echo "Website"
+  echo
+  echo "1 - Install Website"
+  echo "2 - Update Website"
+  echo
+  echo "0 - Back"
+
+  read -p "Selection: " W
+
+  case "$W" in
+    1) install_website ;;
+    2) update_website ;;
+  esac
+}
 install_website() {
 
   derive_db_names || return 1
@@ -1482,32 +1510,6 @@ install_website() {
   chmod -R 755 /var/www/html
   "
 
-  pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/config/config-protected.php" <<EOF
-<?php
-\$realmd = array(
-'db_type' => 'mysql',
-'db_host' => '$DB_IP',
-'db_port' => '3306',
-'db_username' => 'DB_LAN_USER',
-'db_password' => '$DB_LAN_PASS',
-'db_name' => '$REALM_DB',
-'db_encoding' => 'utf8',
-);
-
-\$worlddb = array(
-'db_type' => 'mysql',
-'db_host' => '$DB_IP',
-'db_port' => '3306',
-'db_username' => 'DB_LAN_USER',
-'db_password' => '$DB_LAN_PASS',
-'db_name' => '$WORLD_DB',
-'db_encoding' => 'utf8',
-);
-
-\$DB = \$worlddb;
-?>
-EOF
-
   pct exec "$WEB_CTID" -- bash -c "
   a2enmod rewrite >/dev/null 2>&1 || true
   systemctl restart apache2
@@ -1518,6 +1520,7 @@ EOF
   read -p "Press Enter to continue..."
   
   install_website_db
+  web_config
   
 WEB_EXPECTED="${VERSION_MAP[$EXPANSION:WEBSITE]}"
 INSTALL_DATE=$(date +%F_%H:%M)
@@ -1526,7 +1529,6 @@ write_version "${EXPANSION}_website_version.spp" \
 "${WEB_EXPECTED}|${INSTALL_DATE}"
   
 }
-
 install_website_db() {
 
   derive_db_names || return 1
@@ -1547,6 +1549,17 @@ install_website_db() {
     set -e
     cd $BASE
 
+    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website.sql
+	mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website_news.sql
+  "
+    echo "Website DB installed."
+    TARGET_DB="${EXPANSION}armory"
+    echo "Installing ${EXPANSION}armory DB..."
+	 
+    pct exec "$DB_CTID" -- bash -c "
+    set -e
+    cd $BASE
+
     if [ ! -f armory.7z ]; then
       echo 'armory.7z not found.'
       exit 1
@@ -1554,19 +1567,16 @@ install_website_db() {
 
     7z x -y armory.7z >/dev/null
 
-    mariadb -u root -p$DB_ROOT_PASS < armory.sql
-    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website.sql
-	mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website_news.sql
-
+    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < armory.sql
+	mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < armory_tooltip.sql
+    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < bot_command.sql
     rm -f armory.sql
   "
 
   pct exec "$DB_CTID" -- bash -c "echo 0 > $VERSION_FILE"
 
-  echo "Website DB installed."
+  echo "Armory DB installed."
 }
-
-
 update_website() {
 
   derive_db_names || return 1
@@ -1580,7 +1590,7 @@ update_website() {
   cd /opt/SPP-Armory-Website
 
   git fetch
-  git reset --hard origin/main
+  git reset --hard origin/HEAD
 
   rm -rf /var/www/html/*
   cp -r /opt/SPP-Armory-Website/* /var/www/html/
@@ -1594,6 +1604,64 @@ update_website() {
   echo
   echo "Custom website updated."
   read -p 'Press Enter to continue...'
+}
+web_config(){
+#call  derive_db_names || return 1 if called out of function
+ pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/config/config-protected.php" <<EOF
+<?php
+\$realmd = array(
+'db_type' => 'mysql',
+'db_host' => '$DB_IP',
+'db_port' => '3306',
+'db_username' => '$DB_LAN_USER',
+'db_password' => '$DB_LAN_PASS',
+'db_name' => '$REALM_DB',
+'db_encoding' => 'utf8',
+);
+
+\$worlddb = array(
+'db_type' => 'mysql',
+'db_host' => '$DB_IP',
+'db_port' => '3306',
+'db_username' => '$DB_LAN_USER',
+'db_password' => '$DB_LAN_PASS',
+'db_name' => '$WORLD_DB',
+'db_encoding' => 'utf8',
+);
+
+\$DB = \$worlddb;
+?>
+EOF
+
+pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/armory/configuration/mysql.php" <<EOF
+<?php
+\$realms = array(
+"Vanilla Realm" => array(1,1,1,1,1),
+);
+
+define("DefaultRealmName","Vanilla Realm");
+
+\$realmd_DB = array(
+1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","$REALM_DB"),
+);
+
+\$characters_DB = array(
+1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","${EXPANSION}characters"),
+);
+
+\$mangosd_DB = array(
+1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","$WORLD_DB"),
+);
+
+\$armory_DB = array(
+1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","${EXPANSION}armory"),
+);
+
+\$playerbot_DB = array(
+1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","${EXPANSION}playerbots"),
+);
+?>
+EOF
 }
 
 service_menu() {
