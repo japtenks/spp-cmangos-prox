@@ -248,7 +248,7 @@ EOF
         php7.4 libapache2-mod-php7.4 \
         php7.4-mysql php7.4-curl php7.4-gd \
         php7.4-xml php7.4-mbstring php7.4-zip php7.4-intl \
-        wget p7zip-full
+        wget p7zip-full rsync
 
       pct exec "$CTID" -- systemctl enable apache2
 
@@ -1302,16 +1302,22 @@ git reset --hard origin/HEAD
   "
 }
 update_settings_repo() {
-  for EXP in "${!GAME_CTIDS[@]}"; do
-    GAME_CTID="${GAME_CTIDS[$EXP]}"
+for EXP in "${!GAME_CTIDS[@]}"; do
+  GAME_CTID="${GAME_CTIDS[$EXP]}"
 
-    pct exec "$GAME_CTID" -- bash -c "
-      set -e
-cd /opt/spp-sql
-git fetch --depth 1 origin
-git reset --hard origin/HEAD
-    "
-  done
+  pct exec "$GAME_CTID" -- bash -c "
+  set -e
+  cd /opt
+
+  if [ -d spp-sql ]; then
+      cd spp-sql
+      git fetch --depth 1 origin
+      git reset --hard origin/HEAD
+  else
+      git clone --depth 1 https://github.com/japtenks/spp-cmangos-prox.git spp-sql
+  fi
+  "
+done
 }
 update_repo() {
   update_sql_repo
@@ -1453,7 +1459,6 @@ fi
 
 
 
-
 shared_website_menu() {
   echo
   echo "Website"
@@ -1471,12 +1476,9 @@ shared_website_menu() {
   esac
 }
 install_website() {
-
   derive_db_names || return 1
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
-  DB_PORT="${DB_PORT:-3306}"
-
   case "$EXPANSION" in
     classic)
       REALM_DB="classicrealmd"
@@ -1497,37 +1499,33 @@ install_website() {
   echo
 
   pct exec "$WEB_CTID" -- bash -c "
-  set -e
-  cd /opt
+    set -e
+    rm -rf /var/www/html
+    git clone --depth 1 https://github.com/japtenks/SPP-Armory-Website.git /var/www/html
 
-  rm -rf SPP-Armory-Website
-  git clone https://github.com/japtenks/SPP-Armory-Website.git
-
-  rm -rf /var/www/html/*
-  cp -r SPP-Armory-Website/* /var/www/html/
-
-  chown -R www-data:www-data /var/www/html
-  chmod -R 755 /var/www/html
+    chown -R www-data:www-data /var/www/html
+    chmod -R 755 /var/www/html
   "
 
   pct exec "$WEB_CTID" -- bash -c "
-  a2enmod rewrite >/dev/null 2>&1 || true
-  systemctl restart apache2
+    a2enmod rewrite >/dev/null 2>&1 || true
+    systemctl restart apache2
   "
 
-  echo
-  echo "Custom website installed."
-  read -p "Press Enter to continue..."
-  
   install_website_db
   web_config
-  
+
 WEB_EXPECTED="${VERSION_MAP[$EXPANSION:WEBSITE]}"
 INSTALL_DATE=$(date +%F_%H:%M)
 
 write_version "${EXPANSION}_website_version.spp" \
 "${WEB_EXPECTED}|${INSTALL_DATE}"
-  
+
+  echo
+  echo "Website installed."
+  echo
+read -p "Press Enter to continue..."
+
 }
 install_website_db() {
 
@@ -1546,7 +1544,7 @@ install_website_db() {
   echo "Installing Website DB..."
 
   pct exec "$DB_CTID" -- bash -c "
-    set -e
+   
     cd $BASE
 
     mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website.sql
@@ -1557,7 +1555,7 @@ install_website_db() {
     echo "Installing ${EXPANSION}armory DB..."
 	 
     pct exec "$DB_CTID" -- bash -c "
-    set -e
+  
     cd $BASE
 
     if [ ! -f armory.7z ]; then
@@ -1567,7 +1565,7 @@ install_website_db() {
 
     7z x -y armory.7z >/dev/null
 
-    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < armory.sql
+    mariadb -u root -p$DB_ROOT_PASS < armory.sql
 	mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < armory_tooltip.sql
     mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < bot_command.sql
     rm -f armory.sql
@@ -1580,33 +1578,39 @@ install_website_db() {
 update_website() {
 
   derive_db_names || return 1
-  
+
   echo
   echo "Updating Custom Armory Website..."
   echo
 
   pct exec "$WEB_CTID" -- bash -c "
-  set -e
-  cd /opt/SPP-Armory-Website
+    set -e
+    cd /opt/SPP-Armory-Website || exit 1
 
-  git fetch
-  git reset --hard origin/HEAD
+    git fetch origin
+    git reset --hard origin/HEAD
 
-  rm -rf /var/www/html/*
-  cp -r /opt/SPP-Armory-Website/* /var/www/html/
+    rsync -a --delete \
+      --exclude 'config/' \
+      --exclude 'armory/configuration/mysql.php' \
+      ./ /var/www/html/
 
-  chown -R www-data:www-data /var/www/html
-  chmod -R 755 /var/www/html
-
-  systemctl restart apache2
+    chown -R www-data:www-data /var/www/html
+    chmod -R 755 /var/www/html
+    systemctl restart apache2
   "
 
   echo
-  echo "Custom website updated."
-  read -p 'Press Enter to continue...'
+  echo "Website updated."
+  echo
+read -p "Press Enter to continue..."
+  
 }
 web_config(){
-#call  derive_db_names || return 1 if called out of function
+
+  derive_db_names || return 1
+  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+
  pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/config/config-protected.php" <<EOF
 <?php
 \$realmd = array(
@@ -1633,36 +1637,17 @@ web_config(){
 ?>
 EOF
 
-pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/armory/configuration/mysql.php" <<EOF
-<?php
-\$realms = array(
-"Vanilla Realm" => array(1,1,1,1,1),
-);
+  # Only update DB common vars in armory mysql.php
+  pct exec "$WEB_CTID" -- bash -c "
+    FILE=/var/www/html/armory/configuration/mysql.php
 
-define("DefaultRealmName","Vanilla Realm");
-
-\$realmd_DB = array(
-1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","$REALM_DB"),
-);
-
-\$characters_DB = array(
-1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","${EXPANSION}characters"),
-);
-
-\$mangosd_DB = array(
-1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","$WORLD_DB"),
-);
-
-\$armory_DB = array(
-1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","${EXPANSION}armory"),
-);
-
-\$playerbot_DB = array(
-1 => array("$DB_IP:3306","$DB_LAN_USER","$DB_LAN_PASS","${EXPANSION}playerbots"),
-);
-?>
-EOF
+    sed -i \"s|^\\\$db_host = .*|\\\$db_host = '$DB_IP';|\" \$FILE
+    sed -i \"s|^\\\$db_port = .*|\\\$db_port = '3306';|\" \$FILE
+    sed -i \"s|^\\\$db_user = .*|\\\$db_user = '$DB_LAN_USER';|\" \$FILE
+    sed -i \"s|^\\\$db_pass = .*|\\\$db_pass = '$DB_LAN_PASS';|\" \$FILE
+  "
 }
+
 
 service_menu() {
   auto_detect_stack
