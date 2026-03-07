@@ -31,7 +31,9 @@ if [[ ! -f $CONFIG_FILE ]]; then
     DB_ROOT_PASS=""
     GAME_CORES=4
     GAME_RAM=4096
-    STORAGE_CHOICE=$(pvesm status | awk '$3=="active"{print $1}' | head -n1)
+   
+   STORAGE_CHOICE=$(pvesm status | awk '$2 ~ /lvmthin|zfs|btrfs/ && $3=="active" {print $1; exit}')
+[[ -z "$STORAGE_CHOICE" ]] && STORAGE_CHOICE="local-lvm"
   else
     echo "No stack detected. Running First Run Bootstrap."
 
@@ -64,13 +66,20 @@ if [[ ! -f $CONFIG_FILE ]]; then
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk")
 INSTALLED_EXPANSIONS=()
 AUTO_START="0"   # 0 = manual, 1 = auto-enable
-ASV="Off"		
-
+ASV="Off"	
+	
 DB_HOST=""
 DB_PORT="3306"
 DB_ROOT_PASS="$DB_ROOT_PASS"
+
+DB_LAN_USER="mangos"
+DB_LAN_PASS="mangos"
+DB_LAN_HOST="%"
+
 ADMIN_USER=""
 ADMIN_PASS=""
+
+
 
 MARIADB_CORES=2
 MARIADB_RAM=4096
@@ -152,7 +161,7 @@ for EXP in classic tbc wotlk; do
     VERSION_MAP["$EXP:$TYPE"]="${!VAR:-0}"
   done
 done
-
+#helper functions
 get_storage() {
   echo "$DEFAULT_STORAGE"
 }
@@ -163,10 +172,10 @@ create_container() {
   local CTID=$3
   local START_ORDER=$4
 
-  if pct list | awk 'NR>1 {print $1}' | grep -q "^$CTID$"; then
-    echo "CTID $CTID already exists. Skipping $NAME."
-    return
-  fi
+if pct status "$CTID" &>/dev/null; then
+  echo "CTID $CTID already exists. Skipping $NAME."
+  return
+fi
 
   case $ROLE_TYPE in
     mariadb) CORES=$MARIADB_CORES; RAM=$MARIADB_RAM; DISK=$MARIADB_DISK ;;
@@ -210,6 +219,9 @@ create_container() {
   pct start "$CTID"
 
   echo "Provisioning base OS inside $NAME..."
+  printf '%q ' "${CMD[@]}"
+  echo
+  read -p "Press Enter to return..." _
 
   pct exec "$CTID" -- bash -c "
   set -euo pipefail
@@ -253,7 +265,7 @@ EOF
       pct exec "$CTID" -- systemctl enable apache2
 
       WEB_CTID="$CTID"
-      install_website
+      
       ;;
     game)
       pct exec "$CTID" -- apt install -y \
@@ -266,12 +278,16 @@ EOF
       pct exec "$CTID" -- apt install -y libmariadb3 libssl3
       ;;
   esac
+   
+  echo "$NAME Setup. Install Services"
+  echo
+  read -p "Press Enter to return..." _
 }
 
 ensure_web_template() {
 
   WEB_TEMPLATE="debian-11-standard_11.7-1_amd64.tar.zst"
-  STORAGE="local"
+ TEMPLATE_STORAGE="local"
   CACHE_DIR="/var/lib/vz/template/cache"
 
   if [[ ! -f "${CACHE_DIR}/${WEB_TEMPLATE}" ]]; then
@@ -286,7 +302,7 @@ ensure_web_template() {
     fi
   fi
 
-  WEB_TEMPLATE_FULL="${STORAGE}:vztmpl/${WEB_TEMPLATE}"
+ WEB_TEMPLATE_FULL="${TEMPLATE_STORAGE}:vztmpl/${WEB_TEMPLATE}"
 }
 
 derive_db_names() {
@@ -334,117 +350,7 @@ write_version() {
   pct exec "$DB_CTID" -- bash -c "echo \"$VALUE\" > /opt/$FILE"
 }
 
-install_locales() {
-  derive_db_names || return 1
-
-  echo "Available locales:"
-  echo "fr de es mx ru ko ch tw"
-  read -p "Enter locales to install (space separated): " LOCALES
-  read -p "Replace English? (y/N): " REPLACE
-
-  pct exec "$DB_CTID" -- bash -c "
-  set -euo pipefail
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-  WORLD_DB=\"${WORLD_DB}\"
-
-  echo 'Extracting locales...'
-  cd \"\$BASE\"
-  7z x -y locales.7z >/dev/null
-
-  echo 'Preparing world DB...'
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/prepare.sql\"
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/broadcast_text_locale.sql\"
-
-  for LOC in ${LOCALES}; do
-    case \$LOC in
-      fr) DIR='French' ;;
-      de) DIR='German' ;;
-      es) DIR='Spanish' ;;
-      mx) DIR='Spanish_South_American' ;;
-      ru) DIR='Russian' ;;
-      ko) DIR='Korean' ;;
-      ch) DIR='Chinese' ;;
-      tw) DIR='Taiwanese' ;;
-      *) continue ;;
-    esac
-
-    echo \"Installing \$LOC...\"
-    for f in \"\$BASE/locales/\$DIR\"/*.sql; do
-      [ -f \"\$f\" ] && mariadb -u root \"\$WORLD_DB\" < \"\$f\"
-    done
-
-    if [[ \"${REPLACE}\" == \"y\" ]]; then
-      echo \"Replacing English with \$LOC...\"
-      mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/replace_\${LOC}.sql\"
-    fi
-  done
-
-  echo 'Updating quest locales...'
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/quest_locale_all.sql\"
-
-  rm -rf \"\$BASE/locales\"
-
-  echo 'Locales complete.'
-  "
-}
-
-install_db() {
-  derive_db_names || return 1
-  echo "Installing full DB..."
-  install_world
-  install_realm
-  install_char
-  install_logs
-  create_lan_db_user
-  fix_realm_entry
-  echo "DB install complete."
-}
-
-install_world() {
-  derive_db_names || return 1
-  echo "Installing world DB..."
- if pct exec "$DB_CTID" -- bash -c "
-
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-
-  cd /opt
-  rm -rf spp-sql
-  git clone --depth 1 --filter=blob:none --sparse \
-    https://github.com/japtenks/spp-cmangos-prox.git spp-sql
-
-  cd spp-sql
-  git sparse-checkout set sql/${MAP_KEY}
-  cd sql/${MAP_KEY}
-
-  7z x -y world.7z >/dev/null
-
-  mariadb -u root < drop_world.sql
-  mariadb -u root \"${WORLD_DB}\" < world.sql
-
-  for f in world/*.sql; do
-    [ -f \"\$f\" ] && mariadb -u root \"${WORLD_DB}\" < \"\$f\"
-  done
-
-  rm -f world.sql
- 
-  "; then
-    echo "DB installed successfully."
-  else
-    echo "DB install FAILED."
-    return 1
-  fi
-WORLD_EXPECTED="${VERSION_MAP[$EXPANSION:WORLD]}"
-INSTALL_DATE=$(date +%F_%H:%M)
-
-write_version "${EXPANSION}_world_version.spp" \
-"${WORLD_EXPECTED}|${INSTALL_DATE}"
-}
-
-
+#unsed atm
 update_world() {
 
   derive_db_names || return 1
@@ -480,354 +386,6 @@ update_world() {
   echo "World DB updated."
 }
 
-
-install_realm() {
-  derive_db_names || return 1
-  echo "Installing realm DB..."
-
-  GAME_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
-  REALM_NAME="SPP-${EXPANSION^}"
-
-  if pct exec "$DB_CTID" -- bash -c "
-    set -euo pipefail
-    export MYSQL_PWD='${DB_ROOT_PASS}'
-
-    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-    REALM_DB=\"${REALM_DB_NAME}\"
-
-    mariadb -u root < \"\$BASE/drop_realmd.sql\"
-
-    mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmd.sql\"
-    mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmlist.sql\"
-
-    for f in \"\$BASE/realmd\"/*.sql; do
-      [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
-    done
-
-    for dir in \$(ls -1 \"\$BASE/updates/realmd\" | sort -n); do
-      for f in \"\$BASE/updates/realmd/\$dir\"/*.sql; do
-        [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
-      done
-    done
-
-    REALM_ID=\$(mariadb -u root \"\$REALM_DB\" -N -e \"SELECT IFNULL(MAX(id),0)+1 FROM realmlist;\")
-
-    mariadb -u root \"\$REALM_DB\" -e \"
-      INSERT INTO realmlist (id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
-      VALUES (
-        \$REALM_ID,
-        '${REALM_NAME}',
-        '${GAME_IP}',
-        8085,
-        1,
-        0,
-        1,
-        0
-      );
-    \"
-  "; then
-    echo "Realm DB installed successfully."
-  else
-    echo "Realm DB install FAILED."
-    return 1
-  fi
-  write_version "${EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
-}
- 
-install_logs() {
-  derive_db_names || return 1
-
-    echo "Installing world DB..."
- if pct exec "$DB_CTID" -- bash -c "
-
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-  LOG_DB=\"${LOG_DB_NAME}\"
-
-  mariadb -u root < \"\$BASE/drop_logs.sql\"
-  mariadb -u root \"\$LOG_DB\" < \"\$BASE/logs.sql\"
-  "; then
-    echo "DB installed successfully."
-  else
-    echo "DB install FAILED."
-    return 1
-  fi
-  write_version "${EXPANSION}_logs_version.spp" "${VERSION_MAP[$EXPANSION:LOGS]}"
-}
- 
-install_char() {
-  derive_db_names || return 1
-
-    echo "Installing world DB..."
- if pct exec "$DB_CTID" -- bash -c "
- 
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-  WORLD_DB=\"${WORLD_DB}\"
-  CHAR_DB=\"${CHAR_DB_NAME}\"
-
-  mariadb -u root < \"\$BASE/drop_characters.sql\"
-
-  mariadb -u root \"\$CHAR_DB\" < \"\$BASE/characters.sql\"
-
-  for dir in \$(ls -1 \"\$BASE/updates/characters\" | sort -n); do
-    for f in \"\$BASE/updates/characters/\$dir\"/*.sql; do
-      [ -f \"\$f\" ] && mariadb -u root \"\$CHAR_DB\" < \"\$f\"
-    done
-  done
-
-  for f in \"\$BASE/characters\"/*.sql; do
-    [ -f \"\$f\" ] && mariadb -u root \"\$CHAR_DB\" < \"\$f\"
-  done
-  
-    mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_travel_nodes.sql\"
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_texts.sql\"
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_named_location.sql\"
-  cd \"\$BASE/playerbot\"
-  7z x -y characters_ai_playerbot_equip_cache.7z >/dev/null
-  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_equip_cache.sql
-  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rnditem_cache.sql
-  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rarity_cache.sql
-
-  rm -f characters_ai_playerbot_equip_cache.sql
-  "; then
-    echo "DB installed successfully."
-  else
-    echo "DB install FAILED."
-    return 1
-  fi
- write_version "${EXPANSION}_chars_version.spp" "${VERSION_MAP[$EXPANSION:CHARS]}"
-}
-
-full_install() {
-
-  derive_db_names || return 1
-  
-  echo "Stopping services..."
-  pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
-  pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
-
-  echo "Removing old install directory..."
-  pct exec "$GAME_CTID" -- rm -rf "$INSTALL_DIR"
-
-  echo "Removing old build + source..."
-  pct exec "$GAME_CTID" -- rm -rf /opt/source /opt/spp-settings
-
-  echo "Removing version trackers..."
-  rm -f "${EXPANSION}_core_version.spp"
-  rm -f "${EXPANSION}_world_version.spp"
-  rm -f "${EXPANSION}_logs_version.spp"
-
-  echo "Dropping databases..."
-  pct exec "$DB_CTID" -- bash -c "
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${WORLD_DB};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${CHAR_DB_NAME};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${REALM_DB_NAME};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${LOG_DB_NAME};\"
-  "
-  
-  comp_server
-  install_db
-  update_maps
-  service_create
-  
-}
-
-update_maps() {
-  derive_db_names || return 1
-    URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${MAP_KEY}.7z"
-
-  pct exec "$GAME_CTID" -- bash -c "
-    set -euo pipefail
-INSTALL_DIR="/srv/mangos-${EXPANSION}"
-
-cd "$INSTALL_DIR"
-mkdir -p data
-cd data
-
-    echo 'Downloading map package...'
-    wget -c --show-progress --no-check-certificate \"$URL\" -O ${EXPANSION}.7z
-
-    if [[ ! -f ${EXPANSION}.7z ]]; then
-      echo 'Download failed.'
-      exit 1
-    fi
-
-    echo 'Extracting...'
-    7z x -y ${EXPANSION}.7z >/dev/null
-    rm ${EXPANSION}.7z
-
-    echo 'Maps ready.'
-  "
-MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"
-INSTALL_DATE=$(date +%F_%H:%M)
-
-write_version "${EXPANSION}_maps_version.spp" \
-"${MAP_EXPECTED}|${INSTALL_DATE}"
-}
- 
-reset_characters() {
-  derive_db_names || return 1
-
-  read -p "Char Reset Are you sure (Y/N)? " CONFIRM
-  [[ "$CONFIRM" != "Y" ]] && return
-
-  install_char
-
-  pct exec "$DB_CTID" -- bash -c "
-  set -euo pipefail
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-  WORLD_DB=\"${WORLD_DB}\"
-  CHAR_DB=\"${CHAR_DB_NAME}\"
-
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_travel_nodes.sql\"
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_texts.sql\"
-  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_named_location.sql\"
-  cd \"\$BASE/playerbot\"
-  7z x -y characters_ai_playerbot_equip_cache.7z >/dev/null
-  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_equip_cache.sql
-  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rnditem_cache.sql
-  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rarity_cache.sql
-
-  rm -f characters_ai_playerbot_equip_cache.sql
-
-  echo 'Characters reset Done.'
-  "
-}
-
-comp_server() {
-  
-case "$EXPANSION" in
-  classic)
-    REPO="https://github.com/celguar/mangos-classic.git"
-    INSTALL_DIR="/srv/mangos-classic"
-    ;;
-  tbc)
-    REPO="https://github.com/celguar/mangos-tbc.git"
-    INSTALL_DIR="/srv/mangos-tbc"
-    ;;
-  wotlk)
-    REPO="https://github.com/celguar/mangos-wotlk.git"
-    INSTALL_DIR="/srv/mangos-wotlk"
-    ;;
-esac
-
-pct exec "$GAME_CTID" -- bash -c "
-set -e
-
-cd /opt
-
-if [[ -d source ]]; then
-  echo 'Updating existing core...'
-  cd source
-  git fetch
-  git checkout ike3-bots
-  git pull
-
-cd src/modules/PlayerBots
-git fetch
-git checkout master
-git pull
-else
-  echo 'Cloning fresh core...'
-  git clone $REPO source
-  cd source
-  git checkout ike3-bots
-
-  mkdir -p src/modules
-  cd src/modules
-  git clone https://github.com/cmangos/playerbots.git PlayerBots
-fi
-"
-pct exec "$GAME_CTID" -- bash -c "
-cd /opt/source &&
-mkdir -p build &&
-cd build &&
-cmake .. \
-  -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DBUILD_EXTRACTORS=OFF \
-  -DPCH=1 \
-  -DDEBUG=0 \
-  -DBUILD_PLAYERBOTS=ON \
-  -DBUILD_AHBOT=ON \
-  -DBUILD_MODULES=ON \
-  -DBUILD_GIT_ID=ON \
-  -DBUILD_MODULE_ACHIEVEMENTS=ON \
-  -DBUILD_MODULE_IMMERSIVE=ON \
-  -DBUILD_MODULE_HARDCORE=ON \
-  -DBUILD_MODULE_TRANSMOG=ON \
-  -DBUILD_MODULE_DUALSPEC=ON \
-  -DBUILD_MODULE_BOOST=ON \
-  -DBUILD_MODULE_BARBER=ON \
-  -DBUILD_MODULE_TRAININGDUMMIES=ON \
-  -DBUILD_MODULE_VOICEOVER=ON &&
-make -j\$(nproc) &&
-make install &&
-mkdir -p /var/log/mangos/
-"
-
-CORE_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --abbrev-ref HEAD)
-CORE_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --short HEAD)
-BUILD_DATE=$(date +%F_%H:%M)
-BOT_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --abbrev-ref HEAD)
-BOT_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --short HEAD)
-
-KEY=$(echo "$EXPANSION" | tr '[:lower:]' '[:upper:]')
-EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]}"
-write_version "${EXPANSION}_core_version.spp" \
-"${EXPECTED_CORE}|${CORE_BRANCH}|${CORE_COMMIT}|${BOT_BRANCH}|${BOT_COMMIT}|${BUILD_DATE}"
-
-pct exec "$GAME_CTID" -- bash -c "
-set -e
-cd /opt
-rm -rf spp-settings
-git clone --depth 1 --filter=blob:none --sparse https://github.com/japtenks/spp-cmangos-prox.git spp-settings
-cd spp-settings
-git sparse-checkout set Settings/${MAP_KEY}
-
-CONF_DIR=\"Settings/${MAP_KEY}\"
-cp -f \$CONF_DIR/*.conf $INSTALL_DIR/etc/
-"
-# ----------------------------
-# Deploy realmd to Login LXC
-# ----------------------------
-
-# Create dirs on login container
-pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/bin"
-pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/etc"
-
-# Copy realmd binary + default config
-if ! pct exec "$GAME_CTID" -- test -f "$INSTALL_DIR/bin/realmd"; then
-  echo "ERROR: realmd binary not found in $INSTALL_DIR on game container."
-  return 1
-fi
-
-# Copy realmd binary from installed core
-pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR" -cf - bin/realmd | \
-pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR" -xf -
-
-# Copy realmd.conf from SPP repo
-pct exec "$GAME_CTID" -- tar -C "/opt/spp-settings/Settings/${MAP_KEY}" -cf - realmd.conf | \
-pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR/etc" -xf -
-
-# Create realmd.conf if missing
-pct exec "$LOGIN_CTID" -- bash -c "
-cd $INSTALL_DIR/etc
-if [[ ! -f realmd.conf ]]; then
-  cp realmd.conf.dist realmd.conf
-fi
-"
-update_db_conf
-}
-
-
-
 create_lan_db_user() {
   derive_db_names || return 1
 
@@ -845,127 +403,6 @@ create_lan_db_user() {
   FLUSH PRIVILEGES;
   \"
   "
-}
-
-
-
-
-apply_autostart_setting() {
-[[ -z "$LOGIN_CTID" ]] && auto_detect_stack
-  if [[ "$AUTO_START" == "1" ]]; then
-    pct exec "$LOGIN_CTID" -- systemctl enable realmd
-    pct exec "$GAME_CTID" -- systemctl enable mangosd
-	pct exec "$LOGIN_CTID" -- systemctl start realmd
-    pct exec "$GAME_CTID" -- systemctl start mangosd
-    echo "Autostart ENABLED"
-  else
-    pct exec "$LOGIN_CTID" -- systemctl disable realmd
-    pct exec "$GAME_CTID" -- systemctl disable mangosd
-    echo "Autostart DISABLED"
-  fi
-}
-
-toggle_autostart() {
-
-  if [[ "$AUTO_START" == "1" ]]; then
-    AUTO_START="0"
-	ASV="Off"
-  else
-    AUTO_START="1"
-	ASV="On"
-  fi
-
-  # update config.env
-  sed -i "s/^AUTO_START=.*/AUTO_START=\"$AUTO_START\"/" "$CONFIG_FILE"
-  sed -i "s/^ASV=.*/ASV=\"$ASV\"/" "$CONFIG_FILE"
-  apply_autostart_setting
-
-  echo "AUTO_START is now: $AUTO_START"
-}
-
-get_status() {
-
-auto_detect_stack
-GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
-
-  GREEN="\e[32m"
-  RESET="\e[0m"
-
-  echo
-  echo "=== STACK STATUS ==="
-
-  for CT in "$LOGIN_CTID" "$GAME_CTID" "$WEB_CTID" "$DB_CTID"; do
-
-    [ -z "$CT" ] && continue
-
-    NAME=$(pct config "$CT" | awk -F': ' '/hostname/ {print $2}')
-    STATE=$(pct status "$CT" | awk '{print $2}')
-
-    echo
-    echo "CT $CT ($NAME) - $STATE"
-
-    [ "$STATE" != "running" ] && continue
-
-    for svc in mangosd.service realmd.service mariadb.service apache2.service; do
-
-      STATUS=$(pct exec "$CT" -- systemctl is-active "$svc" 2>/dev/null || true)
-
-      if [ "$STATUS" = "active" ]; then
-
-        start_time=$(pct exec "$CT" -- systemctl show -p ActiveEnterTimestamp "$svc" | cut -d= -f2)
-        start_epoch=$(pct exec "$CT" -- date -d "$start_time" +%s)
-        now_epoch=$(pct exec "$CT" -- date +%s)
-
-        diff=$((now_epoch - start_epoch))
-        days=$((diff/86400))
-        hours=$(((diff%86400)/3600))
-        mins=$(((diff%3600)/60))
-
-        if [ "$days" -gt 0 ]; then
-          runtime="${days}d ${hours}h ${mins}m"
-        elif [ "$hours" -gt 0 ]; then
-          runtime="${hours}h ${mins}m"
-        else
-          runtime="${mins}m"
-        fi
-
-        echo -e "  $svc -> ${GREEN}active${RESET} (up $runtime)"
-      fi
-
-    done
-
-  done
-
-  echo
-  read -p "Press Enter to return..." _
-}
-
-start_stack() {
-
-  # Start containers if needed
-  for CT in "$DB_CTID" "$WEB_CTID" "$LOGIN_CTID" "$GAME_CTID"; do
-    STATE=$(pct status "$CT" | awk '{print $2}')
-    if [[ "$STATE" != "running" ]]; then
-      pct start "$CT"
-    fi
-  done
-
-  # Start services explicitly
-  pct exec "$DB_CTID" -- systemctl start mariadb
-  pct exec "$LOGIN_CTID" -- systemctl start realmd
-  pct exec "$WEB_CTID" -- systemctl start apache2
-  pct exec "$GAME_CTID" -- systemctl start mangosd
-
-}
-
-stop_world() {
-  if [[ "$(pct status "$GAME_CTID" | awk '{print $2}')" != "running" ]]; then
-    echo "World already stopped."
-    return
-  fi
-
-  echo "Stopping World..."
-  pct stop "$GAME_CTID"
 }
 
 stat_state() {
@@ -1017,7 +454,7 @@ print_banner() {
   / ___||  _ \|  _ \\
   \___ \| |_) | |_) |
    ___) |  __/|  __/
-  |____/|_|   |_|    
+  |____/|_|   |_|roxmox    
 "
       ;;
   esac
@@ -1031,7 +468,6 @@ print_banner() {
   echo -e "$LOGO"
   echo -e "$CLEAR"
 }
-
 print_version() {
 
   CORE_RAW=$(get_live_version "/opt/${EXPANSION}_core_version.spp")
@@ -1073,7 +509,6 @@ print_version() {
   echo "Chars: ${CHARS_VER:-NA}  Realm: ${REALM_VER:-NA}  Maps: ${MAPS_VER:-NA}"
   echo "Web: ${WEB_VER:-NA}  Logs: ${LOGS_VER:-NA}"
 }
-
 get_live_version() {
   local FILE=$1
 
@@ -1086,38 +521,62 @@ get_live_version() {
   " 2>/dev/null || echo NOT_INSTALLED
 }
 
-live_logs() {
-  echo "Press Ctrl+C to exit live view."
-  pct exec "$GAME_CTID" -- tail -f /var/log/mangos/Server.log
-}
+# ensure_shared_stack() {
+
+  # if [[ -n "$DB_CTID" && -n "$WEB_CTID" && -n "$LOGIN_CTID" ]]; then
+    # return
+  # fi
+
+  # echo
+  # echo "Shared SPP services missing."
+  # read -p "Create shared stack now? (y/n): " CONFIRM
+  # [[ "$CONFIRM" != "y" ]] && return 1
+
+  # pct list
+  # echo
+
+  # read -p "Enter CTID for spp-db: " DB_NEW
+  # read -p "Enter CTID for spp-web: " WEB_NEW
+  # read -p "Enter CTID for spp-login: " LOGIN_NEW
+
+  # create_container "spp-db" "mariadb" "$DB_NEW" 1
+  # create_container "spp-web" "website" "$WEB_NEW" 2
+  # create_container "spp-login" "login" "$LOGIN_NEW" 3
+
+  # auto_detect_stack
+
+  # DB_CTID="$DB_CTID"
+  # WEB_CTID="$WEB_CTID"
+  # LOGIN_CTID="$LOGIN_CTID"
+# }
 
 ensure_shared_stack() {
 
-  if [[ -n "$DB_CTID" && -n "$WEB_CTID" && -n "$LOGIN_CTID" ]]; then
-    return
-  fi
+  auto_detect_stack
+
+  [[ -n "$DB_CTID" && -n "$WEB_CTID" && -n "$LOGIN_CTID" ]] && return
 
   echo
-  echo "Shared SPP services missing."
-  read -p "Create shared stack now? (y/n): " CONFIRM
-  [[ "$CONFIRM" != "y" ]] && return 1
-
+  echo "Shared SPP services incomplete."
   pct list
   echo
 
-  read -p "Enter CTID for spp-db: " DB_NEW
-  read -p "Enter CTID for spp-web: " WEB_NEW
-  read -p "Enter CTID for spp-login: " LOGIN_NEW
+  if [[ -z "$DB_CTID" ]]; then
+    read -p "Enter CTID for spp-db: " DB_NEW
+    create_container "spp-db" "mariadb" "$DB_NEW" 1
+  fi
 
-  create_container "spp-db" "mariadb" "$DB_NEW" 1
-  create_container "spp-web" "website" "$WEB_NEW" 2
-  create_container "spp-login" "login" "$LOGIN_NEW" 3
+  if [[ -z "$WEB_CTID" ]]; then
+    read -p "Enter CTID for spp-web: " WEB_NEW
+    create_container "spp-web" "website" "$WEB_NEW" 2
+  fi
+
+  if [[ -z "$LOGIN_CTID" ]]; then
+    read -p "Enter CTID for spp-login: " LOGIN_NEW
+    create_container "spp-login" "login" "$LOGIN_NEW" 3
+  fi
 
   auto_detect_stack
-
-  DB_CTID="$DB_CTID"
-  WEB_CTID="$WEB_CTID"
-  LOGIN_CTID="$LOGIN_CTID"
 }
 ensure_game_container() {
 
@@ -1144,13 +603,7 @@ ensure_game_container() {
   GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
 }
 
-
-
-
-
-
-
-
+#menus and functions
 
 main() {
   while true; do
@@ -1282,7 +735,6 @@ shared_repo_menu() {
       ;;
   esac
 }
-
 sync_sql_repo() {
   pct exec "$DB_CTID" -- bash -c "
     set -e
@@ -1328,10 +780,12 @@ shared_config_menu() {
   echo
   echo "Configuration"
   echo
-  echo "1 - Correct Server Confs"
+  echo "1 - Apply Server Confs"
   echo "2 - Fix Realmlist"
-  echo "3 - Create Services"
-  echo
+  echo "3 - Autostart services creation"
+  echo "4 - RealmD Install"
+  echo "5 - spp configs"
+  echo "6 - Fix mariadb configs"
   echo "0 - Back"
 
   read -p "Selection: " C
@@ -1340,6 +794,9 @@ shared_config_menu() {
     1) update_db_conf ;;
     2) fix_realm_entry ;;
     3) service_create ;;
+	4) deploy_realmd ;;
+	5) deploy_spp_configs ;;
+	6) fix_mariadb_bind ;;
   esac
 }
 update_db_conf() {
@@ -1431,6 +888,7 @@ EOF
 apply_autostart_setting
 }
 fix_realm_entry() {
+
 if [[ -z "${EXPANSION:-}" ]]; then
   echo "Select expansion:"
   select EXP in classic tbc wotlk; do
@@ -1438,26 +896,93 @@ if [[ -z "${EXPANSION:-}" ]]; then
   done
 fi
 
-  derive_db_names || return 1
+derive_db_names || return 1
 
-  LOGIN_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+LOGIN_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
 
-  pct exec "$DB_CTID" -- bash -c "
-  export MYSQL_PWD='${DB_ROOT_PASS}'
+pct exec "$DB_CTID" -- bash -c "
+export MYSQL_PWD='${DB_ROOT_PASS}'
 
-  mariadb -u root ${REALM_DB_NAME} -e \"
-    DELETE FROM realmlist WHERE id=${REALM_ID};
-    INSERT INTO realmlist
-    (id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
-    VALUES
-    (${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
-  \"
-  "
+mariadb -u root ${REALM_DB_NAME} -e \"
+DELETE FROM realmlist WHERE id=${REALM_ID};
+DELETE FROM realmlist WHERE name='SPP-${EXPANSION^}';
+INSERT INTO realmlist
+(id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
+VALUES
+(${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
+\"
+"
 
 }
+fix_mariadb_bind() {
+auto_detect_stack
+  derive_db_names || return 1
+pct exec "$DB_CTID" -- bash -c "
 
+CONF=/etc/mysql/mariadb.conf.d/50-server.cnf
 
+if grep -q '^bind-address' \$CONF; then
+  sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' \$CONF
+else
+  echo 'bind-address = 0.0.0.0' >> \$CONF
+fi
 
+systemctl restart mariadb
+"
+
+}
+deploy_spp_configs() {
+
+if [[ -z "${EXPANSION:-}" ]]; then
+  echo "Select expansion:"
+  select EXP in classic tbc wotlk; do
+    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+  done
+fi
+
+case "$EXPANSION" in
+  classic) INSTALL_DIR="/srv/mangos-classic" ;;
+  tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+  wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+esac
+
+derive_db_names || return 1
+
+pct exec "$GAME_CTID" -- bash -c "
+set -e
+cd /opt
+rm -rf spp-settings
+git clone --depth 1 --filter=blob:none --sparse https://github.com/japtenks/spp-cmangos-prox.git spp-settings
+cd spp-settings
+git sparse-checkout set Settings/${MAP_KEY}
+
+CONF_DIR=\"Settings/${MAP_KEY}\"
+cp -f \$CONF_DIR/*.conf $INSTALL_DIR/etc/
+"
+}
+deploy_realmd() {
+
+deploy_spp_configs || return 1
+case "$EXPANSION" in
+  classic) INSTALL_DIR="/srv/mangos-classic" ;;
+  tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+  wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+esac
+
+pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/bin"
+pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/etc"
+
+if ! pct exec "$GAME_CTID" -- test -f "$INSTALL_DIR/bin/realmd"; then
+  echo "ERROR: realmd binary not found."
+  return 1
+fi
+
+pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR" -cf - bin/realmd | \
+pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR" -xf -
+
+pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR/etc" -cf - realmd.conf.dist | \
+pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR/etc" -xf -
+}
 
 shared_website_menu() {
   echo
@@ -1465,6 +990,7 @@ shared_website_menu() {
   echo
   echo "1 - Install Website"
   echo "2 - Update Website"
+  echo "3 - Align php for website db"
   echo
   echo "0 - Back"
 
@@ -1473,6 +999,7 @@ shared_website_menu() {
   case "$W" in
     1) install_website ;;
     2) update_website ;;
+	3) web_config ;;
   esac
 }
 install_website() {
@@ -1583,35 +1110,53 @@ update_website() {
   echo "Updating Custom Armory Website..."
   echo
 
-  pct exec "$WEB_CTID" -- bash -c "
-    set -e
-    cd /opt/SPP-Armory-Website || exit 1
+pct exec "$WEB_CTID" -- bash -c "
+set -e
 
-    git fetch origin
-    git reset --hard origin/HEAD
+if [ ! -d /opt/SPP-Armory-Website ]; then
+  git clone https://github.com/japtenks/SPP-Armory-Website /opt/SPP-Armory-Website
+fi
 
-    rsync -a --delete \
-      --exclude 'config/' \
-      --exclude 'armory/configuration/mysql.php' \
-      ./ /var/www/html/
+cd /opt/SPP-Armory-Website
+git fetch origin
+git reset --hard origin/HEAD
 
-    chown -R www-data:www-data /var/www/html
-    chmod -R 755 /var/www/html
-    systemctl restart apache2
-  "
+rsync -a --delete \
+  --exclude 'config/' \
+  --exclude 'armory/configuration/mysql.php' \
+  --exclude 'config/playermap_config.php' \
+  ./ /var/www/html/
+
+chown -R www-data:www-data /var/www/html
+chmod -R 755 /var/www/html
+systemctl restart apache2
+"
+
 
   echo
   echo "Website updated."
   echo
 read -p "Press Enter to continue..."
-  
+
+LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
+
+pct exec "$WEB_CTID" -- bash -c "
+set -e
+sed -i 's/set Realmlist \"[^\"]*\"/set Realmlist \"$LOGIN_IP\"/' /var/www/html/lang/howtoplay/en.html
+"  
 }
 web_config(){
 
-  derive_db_names || return 1
-  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+derive_db_names || return 1
+DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
- pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/config/config-protected.php" <<EOF
+case "$EXPANSION" in
+  classic) REALM_DB="classicrealmd"; WORLD_DB="classicmangos" ;;
+  tbc)     REALM_DB="tbcrealmd";     WORLD_DB="tbcmangos" ;;
+  wotlk)   REALM_DB="wotlkrealmd";   WORLD_DB="wotlkmangos" ;;
+esac
+
+pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/config/config-protected.php" <<EOF
 <?php
 \$realmd = array(
 'db_type' => 'mysql',
@@ -1637,17 +1182,25 @@ web_config(){
 ?>
 EOF
 
-  # Only update DB common vars in armory mysql.php
-  pct exec "$WEB_CTID" -- bash -c "
-    FILE=/var/www/html/armory/configuration/mysql.php
+pct exec "$WEB_CTID" -- bash -c "
+FILE=/var/www/html/armory/configuration/mysql.php
+sed -i 's|127.0.0.1:3310|$DB_IP:3306|g' \$FILE
+sed -i 's|\"root\"|\"$DB_LAN_USER\"|g' \$FILE
+sed -i 's|\"123456\"|\"$DB_LAN_PASS\"|g' \$FILE
+"
 
-    sed -i \"s|^\\\$db_host = .*|\\\$db_host = '$DB_IP';|\" \$FILE
-    sed -i \"s|^\\\$db_port = .*|\\\$db_port = '3306';|\" \$FILE
-    sed -i \"s|^\\\$db_user = .*|\\\$db_user = '$DB_LAN_USER';|\" \$FILE
-    sed -i \"s|^\\\$db_pass = .*|\\\$db_pass = '$DB_LAN_PASS';|\" \$FILE
-  "
+pct exec "$WEB_CTID" -- bash -c "
+FILE=/var/www/html/components/pomm/config/playermap_config.php
+sed -i 's|127.0.0.1:3310|$DB_IP:3306|g' \$FILE
+sed -i 's|127.0.0.1:3306|$DB_IP:3306|g' \$FILE
+sed -i 's|\"root\"|\"$DB_LAN_USER\"|g' \$FILE
+sed -i 's|\"123456\"|\"$DB_LAN_PASS\"|g' \$FILE
+"
+
+pct exec "$WEB_CTID" -- sed -i "s|127.0.0.1:3306|$DB_IP:3306|g" /var/www/html/config/playermap_config.php
+
+read -p "Press enter to continue..."
 }
-
 
 service_menu() {
   auto_detect_stack
@@ -1687,6 +1240,66 @@ ensure_game_container || return
     esac
   done
 }
+connect_ra() {
+
+  if [[ -z "$ADMIN_USER" || -z "$ADMIN_PASS" ]]; then
+    echo "Admin credentials not set."
+    return 1
+  fi
+
+  IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+
+  if [[ -z "$IP" ]]; then
+    echo "Could not determine IP."
+    return 1
+  fi
+
+  echo "Connecting to RA at $IP:3443"
+  echo "Type 'quit' to exit."
+  echo
+
+  {
+    sleep 1
+    echo "$ADMIN_USER"
+    sleep 1
+    echo "$ADMIN_PASS"
+  } | telnet "$IP" 3443
+}
+live_logs() {
+  echo "Press Ctrl+C to exit live view."
+  pct exec "$GAME_CTID" -- tail -f /var/log/mangos/Server.log
+}
+toggle_autostart() {
+
+  if [[ "$AUTO_START" == "1" ]]; then
+    AUTO_START="0"
+	ASV="Off"
+  else
+    AUTO_START="1"
+	ASV="On"
+  fi
+
+  # update config.env
+  sed -i "s/^AUTO_START=.*/AUTO_START=\"$AUTO_START\"/" "$CONFIG_FILE"
+  sed -i "s/^ASV=.*/ASV=\"$ASV\"/" "$CONFIG_FILE"
+  apply_autostart_setting
+
+  echo "AUTO_START is now: $AUTO_START"
+}
+apply_autostart_setting() {
+[[ -z "$LOGIN_CTID" ]] && auto_detect_stack
+  if [[ "$AUTO_START" == "1" ]]; then
+    pct exec "$LOGIN_CTID" -- systemctl enable realmd
+    pct exec "$GAME_CTID" -- systemctl enable mangosd
+	pct exec "$LOGIN_CTID" -- systemctl start realmd
+    pct exec "$GAME_CTID" -- systemctl start mangosd
+    echo "Autostart ENABLED"
+  else
+    pct exec "$LOGIN_CTID" -- systemctl disable realmd
+    pct exec "$GAME_CTID" -- systemctl disable mangosd
+    echo "Autostart DISABLED"
+  fi
+}
 
 maintenance_menu() {
   while true; do
@@ -1696,9 +1309,9 @@ maintenance_menu() {
     echo
     echo "1 - Core"
     echo "2 - Database"
-    echo "3 - Install Data Pack"
+    echo "3 - (re)Install Data Pack"
     echo
-    echo "I - Full Install"
+    echo "I - Full (re)Install"
     echo "U - Update Setting Repo"	
     echo "0 - Back"
     echo
@@ -1708,7 +1321,7 @@ maintenance_menu() {
     case "$MSEL" in
       1) core_menu ;;
       2) database_menu ;;
-      3) update_maps ;;
+      3) install_data ;;
       I)
         read -p "Type YES to continue: " CONFIRM
         [[ "$CONFIRM" == "YES" ]] && full_install
@@ -1720,35 +1333,6 @@ maintenance_menu() {
     esac
   done
 }
-sync_settings_repo() {
-  pct exec "$GAME_CTID" -- bash -c "
-    set -e
-    cd /opt
-    rm -rf spp-settings
-    git clone --depth 1 --filter=blob:none --sparse \
-      https://github.com/japtenks/spp-cmangos-prox.git spp-settings
-    cd spp-settings
-    git sparse-checkout set Settings/${MAP_KEY}
-  "
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 core_menu() {
   while true; do
@@ -1774,21 +1358,134 @@ core_menu() {
         fi
         ;;
       2)
-        read -p "Confirm update? (Y/N): " CONFIRM
-        if [[ "$CONFIRM" == "Y" ]]; then
-          pct exec "$GAME_CTID" -- bash -c "
-            cd /opt/source &&
-            git pull &&
-            cd build &&
-            make -j\$(nproc) &&
-            make install
-          "
-        fi
+        read -p "Confirm update? (YES): " CONFIRM
+        [[ "$CONFIRM" == "YES" ]] && update_core
         ;;
       0) return ;;
     esac
   done
 }
+comp_server() {
+  
+case "$EXPANSION" in
+  classic)
+    REPO="https://github.com/celguar/mangos-classic.git"
+    INSTALL_DIR="/srv/mangos-classic"
+    ;;
+  tbc)
+    REPO="https://github.com/celguar/mangos-tbc.git"
+    INSTALL_DIR="/srv/mangos-tbc"
+    ;;
+  wotlk)
+    REPO="https://github.com/celguar/mangos-wotlk.git"
+    INSTALL_DIR="/srv/mangos-wotlk"
+    ;;
+esac
+
+pct exec "$GAME_CTID" -- bash -c "
+set -e
+
+cd /opt
+
+if [[ -d source ]]; then
+  echo 'Updating existing core...'
+  cd source
+  git fetch
+  git checkout ike3-bots
+  git pull
+
+cd src/modules/playerbot
+git fetch
+git checkout master
+git pull
+else
+  echo 'Cloning fresh core...'
+  git clone $REPO source
+  cd source
+  git checkout ike3-bots
+
+  mkdir -p src/modules
+  cd src/modules
+  git clone https://github.com/cmangos/playerbots.git playerbot
+fi
+"
+pct exec "$GAME_CTID" -- bash -c "
+cd /opt/source &&
+mkdir -p build &&
+cd build &&
+cmake .. \
+  -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DBUILD_EXTRACTORS=OFF \
+  -DPCH=1 \
+  -DDEBUG=0 \
+  -DBUILD_PLAYERBOTS=ON \
+  -DBUILD_AHBOT=ON \
+  -DBUILD_MODULES=ON \
+  -DBUILD_GIT_ID=ON \
+  -DBUILD_MODULE_ACHIEVEMENTS=ON \
+  -DBUILD_MODULE_IMMERSIVE=ON \
+  -DBUILD_MODULE_HARDCORE=ON \
+  -DBUILD_MODULE_TRANSMOG=ON \
+  -DBUILD_MODULE_DUALSPEC=ON \
+  -DBUILD_MODULE_BOOST=ON \
+  -DBUILD_MODULE_BARBER=ON \
+  -DBUILD_MODULE_TRAININGDUMMIES=ON \
+  -DBUILD_MODULE_VOICEOVER=ON &&
+make -j\$(nproc) &&
+make install &&
+mkdir -p /var/log/mangos/
+"
+
+update_core_metadata
+
+deploy_realmd
+update_db_conf
+}
+update_core() {
+
+OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
+OLD_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
+
+pct exec "$GAME_CTID" -- bash -c "
+set -e
+cd /opt/source
+git fetch
+git checkout ike3-bots
+git pull
+
+cd src/modules/playerbot
+git fetch
+git pull
+"
+
+NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
+NEW_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
+
+if [[ "$OLD_CORE" != "$NEW_CORE" || "$OLD_BOT" != "$NEW_BOT" ]]; then
+  pct exec "$GAME_CTID" -- bash -c "
+  cd /opt/source/build
+  make -j\$(nproc)
+  make install
+  "
+fi
+
+update_core_metadata
+}
+update_core_metadata() {
+CORE_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --abbrev-ref HEAD)
+CORE_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --short HEAD)
+BOT_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --abbrev-ref HEAD)
+BOT_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --short HEAD)
+BUILD_DATE=$(date +%F_%H:%M)
+
+KEY=$(echo "$EXPANSION" | tr '[:lower:]' '[:upper:]')
+EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]}"
+
+write_version "${EXPANSION}_core_version.spp" \
+"${EXPECTED_CORE}|${CORE_BRANCH}|${CORE_COMMIT}|${BOT_BRANCH}|${BOT_COMMIT}|${BUILD_DATE}"
+}
+
 database_menu() {
   while true; do
     clear
@@ -1803,7 +1500,7 @@ database_menu() {
 	echo
 	echo "4 - Update realmd DB"
 	echo "5 - Update characters DB"
-	echo "6 - Update playerbot DB"
+	echo "6 - Update PlayerBots DB"
 	echo
     echo "0 - Back"
     echo
@@ -1822,18 +1519,263 @@ database_menu() {
       3)         
 	    read -p "Confirm install? (Y/N): " CONFIRM
         [[ "$CONFIRM" == "Y" ]] && install_locales ;;
-		      4)         
+	  4)         
 	    read -p "Confirm update on realmd? (Y/N): " CONFIRM
         [[ "$CONFIRM" == "Y" ]] && update_db_type realmd ;;
-		      5)         
+	  5)         
 	    read -p "Confirm update on characters? (Y/N): " CONFIRM
         [[ "$CONFIRM" == "Y" ]] && update_db_type characters ;;
-		      6)         
-	    read -p "Confirm update on playerbot? (Y/N): " CONFIRM
+	  6)         
+	    read -p "Confirm update on PlayerBots? (Y/N): " CONFIRM
         [[ "$CONFIRM" == "Y" ]] && update_db_type playerbot ;;
       0) return ;;
     esac
   done
+}
+
+install_db() {
+  derive_db_names || return 1
+  echo "Installing full DB..."
+  install_world
+  install_char
+  install_logs
+  install_realm
+  create_lan_db_user
+  fix_realm_entry
+  echo "DB install complete."
+}
+install_world() {
+  derive_db_names || return 1
+  echo "Installing world DB..."
+ if pct exec "$DB_CTID" -- bash -c "
+
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+
+  cd /opt
+  rm -rf spp-sql
+  git clone --depth 1 --filter=blob:none --sparse \
+    https://github.com/japtenks/spp-cmangos-prox.git spp-sql
+
+  cd spp-sql
+  git sparse-checkout set sql/${MAP_KEY}
+  cd sql/${MAP_KEY}
+
+  7z x -y world.7z >/dev/null
+
+  mariadb -u root < drop_world.sql
+  mariadb -u root \"${WORLD_DB}\" < world.sql
+
+  for f in world/*.sql; do
+    [ -f \"\$f\" ] && mariadb -u root \"${WORLD_DB}\" < \"\$f\"
+  done
+
+  rm -f world.sql
+ 
+  "; then
+    echo "DB installed successfully."
+  else
+    echo "DB install FAILED."
+    return 1
+  fi
+WORLD_EXPECTED="${VERSION_MAP[$EXPANSION:WORLD]}"
+INSTALL_DATE=$(date +%F_%H:%M)
+
+write_version "${EXPANSION}_world_version.spp" \
+"${WORLD_EXPECTED}|${INSTALL_DATE}"
+  read -p "Press Enter to return..." _
+}
+install_realm() {
+  derive_db_names || return 1
+  echo "Installing realm DB..."
+
+  GAME_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+  REALM_NAME="SPP-${EXPANSION^}"
+
+  if pct exec "$DB_CTID" -- bash -c "
+    set -euo pipefail
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+    REALM_DB=\"${REALM_DB_NAME}\"
+
+    mariadb -u root < \"\$BASE/drop_realmd.sql\"
+
+    mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmd.sql\"
+    mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmlist.sql\"
+
+    for f in \"\$BASE/realmd\"/*.sql; do
+      [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
+    done
+
+    for dir in \$(ls -1 \"\$BASE/updates/realmd\" | sort -n); do
+      for f in \"\$BASE/updates/realmd/\$dir\"/*.sql; do
+        [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
+      done
+    done
+
+  "; then
+    echo "Realm DB installed successfully."
+  else
+    echo "Realm DB install FAILED."
+    return 1
+  fi
+  write_version "${EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
+    read -p "Press Enter to return..." _
+}
+install_char() {
+  derive_db_names || return 1
+
+    echo "Installing world DB..."
+ if pct exec "$DB_CTID" -- bash -c "
+ 
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+  WORLD_DB=\"${WORLD_DB}\"
+  CHAR_DB=\"${CHAR_DB_NAME}\"
+
+  mariadb -u root < \"\$BASE/drop_characters.sql\"
+
+  mariadb -u root \"\$CHAR_DB\" < \"\$BASE/characters.sql\"
+
+  for dir in \$(ls -1 \"\$BASE/updates/characters\" | sort -n); do
+    for f in \"\$BASE/updates/characters/\$dir\"/*.sql; do
+      [ -f \"\$f\" ] && mariadb -u root \"\$CHAR_DB\" < \"\$f\"
+    done
+  done
+
+  for f in \"\$BASE/characters\"/*.sql; do
+    [ -f \"\$f\" ] && mariadb -u root \"\$CHAR_DB\" < \"\$f\"
+  done
+  
+    mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_travel_nodes.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_texts.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_named_location.sql\"
+  cd \"\$BASE/playerbot\"
+  7z x -y characters_ai_playerbot_equip_cache.7z >/dev/null
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_equip_cache.sql
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rnditem_cache.sql
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rarity_cache.sql
+
+  rm -f characters_ai_playerbot_equip_cache.sql
+  "; then
+    echo "DB installed successfully."
+  else
+    echo "DB install FAILED."
+    return 1
+  fi
+ write_version "${EXPANSION}_chars_version.spp" "${VERSION_MAP[$EXPANSION:CHARS]}"
+   read -p "Press Enter to return..." _
+}
+install_logs() {
+  derive_db_names || return 1
+
+    echo "Installing world DB..."
+ if pct exec "$DB_CTID" -- bash -c "
+
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+  LOG_DB=\"${LOG_DB_NAME}\"
+
+  mariadb -u root < \"\$BASE/drop_logs.sql\"
+  mariadb -u root \"\$LOG_DB\" < \"\$BASE/logs.sql\"
+  "; then
+    echo "DB installed successfully."
+  else
+    echo "DB install FAILED."
+    return 1
+  fi
+  write_version "${EXPANSION}_logs_version.spp" "${VERSION_MAP[$EXPANSION:LOGS]}"
+    read -p "Press Enter to return..." _
+}
+  
+reset_characters() {
+  derive_db_names || return 1
+
+  read -p "Char Reset Are you sure (Y/N)? " CONFIRM
+  [[ "$CONFIRM" != "Y" ]] && return
+
+  install_char
+
+  pct exec "$DB_CTID" -- bash -c "
+  set -euo pipefail
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+  WORLD_DB=\"${WORLD_DB}\"
+  CHAR_DB=\"${CHAR_DB_NAME}\"
+
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_travel_nodes.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_texts.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/world/ai_playerbot_named_location.sql\"
+  cd \"\$BASE/playerbot\"
+  7z x -y characters_ai_playerbot_equip_cache.7z >/dev/null
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_equip_cache.sql
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rnditem_cache.sql
+  mariadb -u root \"\$CHAR_DB\" < characters_ai_playerbot_rarity_cache.sql
+
+  rm -f characters_ai_playerbot_equip_cache.sql
+
+  echo 'Characters reset Done.'
+  "
+}
+install_locales() {
+  derive_db_names || return 1
+
+  echo "Available locales:"
+  echo "fr de es mx ru ko ch tw"
+  read -p "Enter locales to install (space separated): " LOCALES
+  read -p "Replace English? (y/N): " REPLACE
+
+  pct exec "$DB_CTID" -- bash -c "
+  set -euo pipefail
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+
+  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+  WORLD_DB=\"${WORLD_DB}\"
+
+  echo 'Extracting locales...'
+  cd \"\$BASE\"
+  7z x -y locales.7z >/dev/null
+
+  echo 'Preparing world DB...'
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/prepare.sql\"
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/broadcast_text_locale.sql\"
+
+  for LOC in ${LOCALES}; do
+    case \$LOC in
+      fr) DIR='French' ;;
+      de) DIR='German' ;;
+      es) DIR='Spanish' ;;
+      mx) DIR='Spanish_South_American' ;;
+      ru) DIR='Russian' ;;
+      ko) DIR='Korean' ;;
+      ch) DIR='Chinese' ;;
+      tw) DIR='Taiwanese' ;;
+      *) continue ;;
+    esac
+
+    echo \"Installing \$LOC...\"
+    for f in \"\$BASE/locales/\$DIR\"/*.sql; do
+      [ -f \"\$f\" ] && mariadb -u root \"\$WORLD_DB\" < \"\$f\"
+    done
+
+    if [[ \"${REPLACE}\" == \"y\" ]]; then
+      echo \"Replacing English with \$LOC...\"
+      mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/replace_\${LOC}.sql\"
+    fi
+  done
+
+  echo 'Updating quest locales...'
+  mariadb -u root \"\$WORLD_DB\" < \"\$BASE/locales/quest_locale_all.sql\"
+
+  rm -rf \"\$BASE/locales\"
+
+  echo 'Locales complete.'
+  "
 }
 update_db_type() {
 
@@ -1877,31 +1819,91 @@ update_db_type() {
 
   echo "$TYPE updated to v$LATEST."
 }
-connect_ra() {
 
-  if [[ -z "$ADMIN_USER" || -z "$ADMIN_PASS" ]]; then
-    echo "Admin credentials not set."
-    return 1
-  fi
+install_data() {
+  derive_db_names || return 1
+    URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${MAP_KEY}.7z"
 
-  IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+  pct exec "$GAME_CTID" -- bash -c "
+    set -euo pipefail
+INSTALL_DIR="/srv/mangos-${EXPANSION}"
 
-  if [[ -z "$IP" ]]; then
-    echo "Could not determine IP."
-    return 1
-  fi
+cd "$INSTALL_DIR"
+mkdir -p data
+cd data
 
-  echo "Connecting to RA at $IP:3443"
-  echo "Type 'quit' to exit."
-  echo
+    echo 'Downloading map package...'
+    wget -c --show-progress --no-check-certificate \"$URL\" -O ${EXPANSION}.7z
 
-  {
-    sleep 1
-    echo "$ADMIN_USER"
-    sleep 1
-    echo "$ADMIN_PASS"
-  } | telnet "$IP" 3443
+    if [[ ! -f ${EXPANSION}.7z ]]; then
+      echo 'Download failed.'
+      exit 1
+    fi
+
+    echo 'Extracting...'
+    7z x -y ${EXPANSION}.7z >/dev/null
+    rm ${EXPANSION}.7z
+
+    echo 'Maps ready.'
+  "
+MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"
+INSTALL_DATE=$(date +%F_%H:%M)
+
+write_version "${EXPANSION}_maps_version.spp" \
+"${MAP_EXPECTED}|${INSTALL_DATE}"
 }
+full_install() {
+
+  derive_db_names || return 1
+
+  echo "Stopping services..."
+  pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
+  pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
+  pct exec "$WEB_CTID" -- systemctl stop apache2 2>/dev/null || true
+
+  echo "Removing old install directory..."
+  pct exec "$GAME_CTID" -- rm -rf "$INSTALL_DIR"
+  pct exec "$LOGIN_CTID" -- rm -rf "$INSTALL_DIR"
+  pct exec "$WEB_CTID" -- rm -rf /var/www/html/*
+
+  echo "Removing old build + source..."
+  pct exec "$GAME_CTID" -- rm -rf /opt/source /opt/spp-settings
+
+  echo "Removing version trackers..."
+  rm -f "${EXPANSION}_core_version.spp"
+  rm -f "${EXPANSION}_world_version.spp"
+  rm -f "${EXPANSION}_logs_version.spp"
+  rm -f "${EXPANSION}"_*_version.spp
+
+  echo "Dropping databases..."
+  pct exec "$DB_CTID" -- bash -c "
+  export MYSQL_PWD='${DB_ROOT_PASS}'
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${WORLD_DB};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${CHAR_DB_NAME};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${REALM_DB_NAME};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${LOG_DB_NAME};\"
+  mariadb -u root -e \"DROP DATABASE IF EXISTS ${EXPANSION}armory;\"
+  "
+
+  comp_server
+  install_db
+  install_data
+  service_create
+  install_website
+  fix_mariadb_bind
+}
+sync_settings_repo() {
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd /opt
+    rm -rf spp-settings
+    git clone --depth 1 --filter=blob:none --sparse \
+      https://github.com/japtenks/spp-cmangos-prox.git spp-settings
+    cd spp-settings
+    git sparse-checkout set Settings/${MAP_KEY}
+  "
+}
+
 
 stack_control_menu() {
   while true; do
@@ -1932,6 +1934,87 @@ stack_control_menu() {
     esac
   done
 }
+get_status() {
+
+auto_detect_stack
+GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+
+  GREEN="\e[32m"
+  RESET="\e[0m"
+
+  echo
+  echo "=== STACK STATUS ==="
+
+  for CT in "$LOGIN_CTID" "$GAME_CTID" "$WEB_CTID" "$DB_CTID"; do
+
+    [ -z "$CT" ] && continue
+
+    NAME=$(pct config "$CT" | awk -F': ' '/hostname/ {print $2}')
+    STATE=$(pct status "$CT" | awk '{print $2}')
+
+    echo
+    echo "CT $CT ($NAME) - $STATE"
+
+    [ "$STATE" != "running" ] && continue
+
+    for svc in mangosd.service realmd.service mariadb.service apache2.service; do
+
+      STATUS=$(pct exec "$CT" -- systemctl is-active "$svc" 2>/dev/null || true)
+
+      if [ "$STATUS" = "active" ]; then
+
+        start_time=$(pct exec "$CT" -- systemctl show -p ActiveEnterTimestamp "$svc" | cut -d= -f2)
+        start_epoch=$(pct exec "$CT" -- date -d "$start_time" +%s)
+        now_epoch=$(pct exec "$CT" -- date +%s)
+
+        diff=$((now_epoch - start_epoch))
+        days=$((diff/86400))
+        hours=$(((diff%86400)/3600))
+        mins=$(((diff%3600)/60))
+
+        if [ "$days" -gt 0 ]; then
+          runtime="${days}d ${hours}h ${mins}m"
+        elif [ "$hours" -gt 0 ]; then
+          runtime="${hours}h ${mins}m"
+        else
+          runtime="${mins}m"
+        fi
+
+        echo -e "  $svc -> ${GREEN}active${RESET} (up $runtime)"
+      fi
+
+    done
+
+  done
+
+  echo
+  read -p "Press Enter to return..." _
+}
+stop_world() {
+  if [[ "$(pct status "$GAME_CTID" | awk '{print $2}')" != "running" ]]; then
+    echo "World already stopped."
+    return
+  fi
+
+  echo "Stopping World..."
+  pct stop "$GAME_CTID"
+}
+start_stack() {
+
+for CT in "$DB_CTID" "$WEB_CTID" "$LOGIN_CTID" "$GAME_CTID"; do
+  STATE=$(pct status "$CT" | awk '{print $2}')
+  if [[ "$STATE" != "running" ]]; then
+    pct start "$CT"
+    pct exec "$CT" -- bash -c "while ! systemctl is-system-running --quiet 2>/dev/null; do sleep 1; done"
+  fi
+done
+
+pct exec "$DB_CTID" -- systemctl start mariadb
+pct exec "$LOGIN_CTID" -- systemctl start realmd
+pct exec "$WEB_CTID" -- systemctl start apache2
+pct exec "$GAME_CTID" -- systemctl start mangosd
+
+}
 
 server_info_menu() {
   auto_detect_stack
@@ -1951,10 +2034,12 @@ server_info_menu() {
     echo
     echo "1 - World Settings"
     echo "2 - Bots Settings"
-    echo "3 - Change Server Address"
-    echo "4 - Change Realm Name"
-    echo "5 - Server Logs"
-    echo "6 - Crash Logs"
+    echo "3 - RealmD Settings"
+	echo
+    echo "4 - Change Server Address"
+    echo "5 - Change Realm Name"
+    echo "6 - Server Logs"
+    echo "7 - Crash Logs"
     echo
     echo "0 - Back"
     echo
@@ -1964,10 +2049,11 @@ server_info_menu() {
     case "$INFO" in
       1) edit_world_settings ;;
       2) edit_bot_settings ;;
-      3) change_server_address ;;
-      4) change_realm_name ;;
-      5) live_logs ;;
-      6) view_crash_logs ;;
+	  3) edit_realmd_settings ;;
+      4) change_server_address ;;
+      5) change_realm_name ;;
+      6) live_logs ;;
+      7) view_crash_logs ;;
       0) return ;;
     esac
   done
@@ -1977,6 +2063,9 @@ edit_world_settings() {
 }
 edit_bot_settings() {
   pct exec "$GAME_CTID" -- nano /srv/mangos-$EXPANSION/etc/aiplayerbot.conf
+}
+edit_realmd_settings() {
+  pct exec "$LOGIN_CTID" -- nano /srv/mangos-$EXPANSION/etc/realmd.conf
 }
 change_server_address() {
   read -p "Enter new public IP: " NEWIP
