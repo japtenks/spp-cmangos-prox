@@ -846,14 +846,15 @@ derive_db_names
 cat > /etc/systemd/system/realmd.service <<EOF
 [Unit]
 Description=CMaNGOS Realmd
-After=network.target mariadb.service
+After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$INSTALL_DIR
+WorkingDirectory=$INSTALL_DIR/bin
 ExecStart=$INSTALL_DIR/bin/realmd -c $INSTALL_DIR/etc/realmd.conf
 Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -867,15 +868,15 @@ EOF
 cat > /etc/systemd/system/mangosd.service <<EOF
 [Unit]
 Description=CMaNGOS World Server
-After=network.target mariadb.service
+After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$INSTALL_DIR
+WorkingDirectory=$INSTALL_DIR/bin
 ExecStart=$INSTALL_DIR/bin/mangosd -c $INSTALL_DIR/etc/mangosd.conf
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -906,10 +907,19 @@ export MYSQL_PWD='${DB_ROOT_PASS}'
 mariadb -u root ${REALM_DB_NAME} -e \"
 DELETE FROM realmlist WHERE id=${REALM_ID};
 DELETE FROM realmlist WHERE name='SPP-${EXPANSION^}';
+
 INSERT INTO realmlist
 (id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
 VALUES
 (${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
+
+DELETE FROM realmbuilds WHERE realmId=${REALM_ID};
+
+INSERT INTO realmbuilds (realmId,build)
+VALUES
+(${REALM_ID},5875),
+(${REALM_ID},8606),
+(${REALM_ID},12340);
 \"
 "
 
@@ -1104,7 +1114,8 @@ install_website_db() {
 }
 update_website() {
 
-  derive_db_names || return 1
+derive_db_names || return 1
+DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
   echo
   echo "Updating Custom Armory Website..."
@@ -1144,6 +1155,22 @@ pct exec "$WEB_CTID" -- bash -c "
 set -e
 sed -i 's/set Realmlist \"[^\"]*\"/set Realmlist \"$LOGIN_IP\"/' /var/www/html/lang/howtoplay/en.html
 "  
+
+pct exec "$WEB_CTID" -- bash -c "
+for FILE in \
+/var/www/html/xfer/includes/com_db.php \
+/var/www/html/xfer/includes/realm_db.php
+do
+  sed -i \"s|'host' => '127.0.0.1'|'host' => '$DB_IP'|\" \$FILE
+  sed -i \"s|'port' => 3310|'port' => 3306|\" \$FILE
+  sed -i \"s|'user' => 'root'|'user' => '$DB_LAN_USER'|\" \$FILE
+  sed -i \"s|'pass' => '123456'|'pass' => '$DB_LAN_PASS'|\" \$FILE
+done
+"
+  echo
+  echo "Ip address updated."
+  echo
+read -p "Press Enter to continue..."
 }
 web_config(){
 
