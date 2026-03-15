@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+trap 'echo "ERROR at line $LINENO: $BASH_COMMAND" >&2' ERR
 DRY_RUN=0
 # -------------------------
 # First Run Bootstrap
@@ -8,17 +9,20 @@ CONFIG_FILE="./config.env"
 declare -A GAME_CTIDS
 
 auto_detect_stack() {
-  DB_CTID=$(pct list | awk '$3=="spp-db" {print $1}')
-  WEB_CTID=$(pct list | awk '$3=="spp-web" {print $1}')
-  LOGIN_CTID=$(pct list | awk '$3=="spp-login" {print $1}')
 
-  for EXP in classic tbc wotlk; do
-    CT=$(pct list | awk -v name="spp-$EXP" '$3==name {print $1}')
-    if [[ -n "$CT" ]]; then
-      KEY=$(echo "$EXP" | tr '[:lower:]' '[:upper:]')
-      GAME_CTIDS[$EXP]=$CT
-    fi
+  local _pct
+  _pct=$(pct list) || return
+
+  DB_CTID=$(awk '$3=="spp-db"    {print $1}' <<< "$_pct") || true
+  WEB_CTID=$(awk '$3=="spp-web"  {print $1}' <<< "$_pct") || true
+  LOGIN_CTID=$(awk '$3=="spp-login" {print $1}' <<< "$_pct") || true
+
+  local _exp _ct
+  for _exp in classic tbc wotlk; do
+    _ct=$(awk -v name="spp-$_exp" '$3==name {print $1}' <<< "$_pct") || true
+    [[ -n "$_ct" ]] && GAME_CTIDS[$_exp]=$_ct
   done
+return 0
 }
 
 if [[ ! -f $CONFIG_FILE ]]; then
@@ -76,8 +80,8 @@ DB_LAN_USER="mangos"
 DB_LAN_PASS="mangos"
 DB_LAN_HOST="%"
 
-ADMIN_USER=""
-ADMIN_PASS=""
+ADMIN_USER="japtenks"
+ADMIN_PASS="eltnub"
 
 
 
@@ -129,27 +133,16 @@ WOTLK_WEBSITE_VERSION=6
 WOTLK_MAPS_VERSION=2
 
 EOF
-
-  # ---- Append detected CTIDs if they exist ----
-  for EXP in classic tbc wotlk; do
-    KEY=$(echo "$EXP" | tr '[:lower:]' '[:upper:]')
-    GAME_VAL="${GAME_CTIDS[$EXP]:-}"
-
-    if [[ -n "$GAME_VAL" && -n "$DB_CTID" ]]; then
-      cat <<EOF >> "$CONFIG_FILE"
-${KEY}_DB_CTID=$DB_CTID
-${KEY}_WEB_CTID=$WEB_CTID
-${KEY}_LOGIN_CTID=$LOGIN_CTID
-${KEY}_GAME_CTID=$GAME_VAL
-EOF
-    fi
-  done
-
   echo "config.env created."
 fi
 
 source "$CONFIG_FILE"
-: ${INSTALLED_EXPANSIONS:=()}
+
+#read -p "Press Enter..."
+DB_CTID="${DB_CTID:-}"
+WEB_CTID="${WEB_CTID:-}"
+LOGIN_CTID="${LOGIN_CTID:-}"
+GAME_CTID="${GAME_CTID:-}"
 EXPANSION=""
 declare -A VERSION_MAP
 
@@ -260,7 +253,7 @@ EOF
         php7.4 libapache2-mod-php7.4 \
         php7.4-mysql php7.4-curl php7.4-gd \
         php7.4-xml php7.4-mbstring php7.4-zip php7.4-intl \
-        wget p7zip-full rsync
+        wget p7zip-full rsync php-gmp
 
       pct exec "$CTID" -- systemctl enable apache2
 
@@ -416,8 +409,9 @@ stat_state() {
 }
 
 print_banner() {
-
   local EXP="${EXPANSION:-main}"
+  local COLOR LOGO
+  local CLEAR="\e[0m"
 
   case "$EXP" in
     tbc)
@@ -443,7 +437,7 @@ print_banner() {
       LOGO="
      _      __     __  __   __ __
     | | /| / /__  / /_/ /  / //_/
-    | |/ |/ / _ \/ __/ /__/ ,<
+    | |/ |/ / _ \/ __/ /__/ ,
     |__/|__/\___/\__/____/_/|_|
 "
       ;;
@@ -454,12 +448,11 @@ print_banner() {
   / ___||  _ \|  _ \\
   \___ \| |_) | |_) |
    ___) |  __/|  __/
-  |____/|_|   |_|roxmox    
+  |____/|_|   |_|roxmox
 "
       ;;
   esac
 
-  CLEAR="\e[0m"
   clear
   echo -e "$COLOR"
   echo "########################################"
@@ -468,87 +461,56 @@ print_banner() {
   echo -e "$LOGO"
   echo -e "$CLEAR"
 }
-print_version() {
 
-  CORE_RAW=$(get_live_version "/opt/${EXPANSION}_core_version.spp")
+print_version() {
+  [[ -z "${DB_CTID:-}" ]] && return
+
+  local RAW
+  RAW=$(pct exec "$DB_CTID" -- bash -c "
+    for f in core world chars realm logs maps website; do
+      FILE=\"/opt/${EXPANSION}_\${f}_version.spp\"
+      if [[ -f \"\$FILE\" ]]; then
+        echo \"\${f}:\$(cat \$FILE)\"
+      else
+        echo \"\${f}:NOT_INSTALLED\"
+      fi
+    done
+  " 2>/dev/null) || RAW=""
+
+  local CORE_RAW WORLD_RAW CHARS_RAW REALM_RAW LOGS_RAW MAPS_RAW WEB_RAW
+  CORE_RAW=$(grep  '^core:'    <<< "$RAW" | cut -d: -f2-)
+  WORLD_RAW=$(grep '^world:'   <<< "$RAW" | cut -d: -f2-)
+  CHARS_RAW=$(grep '^chars:'   <<< "$RAW" | cut -d: -f2-)
+  REALM_RAW=$(grep '^realm:'   <<< "$RAW" | cut -d: -f2-)
+  LOGS_RAW=$(grep  '^logs:'    <<< "$RAW" | cut -d: -f2-)
+  MAPS_RAW=$(grep  '^maps:'    <<< "$RAW" | cut -d: -f2-)
+  WEB_RAW=$(grep   '^website:' <<< "$RAW" | cut -d: -f2-)
+
+  local CORE_VER CORE_BRANCH CORE_COMMIT BOT_BRANCH BOT_COMMIT BUILD_DATE
   IFS='|' read -r CORE_VER CORE_BRANCH CORE_COMMIT BOT_BRANCH BOT_COMMIT BUILD_DATE <<< "$CORE_RAW"
 
-  WORLD_RAW=$(get_live_version "/opt/${EXPANSION}_world_version.spp")
-  IFS='|' read -r WORLD_VER _ <<< "$WORLD_RAW"
+  local WORLD_VER; IFS='|' read -r WORLD_VER _ <<< "$WORLD_RAW"
+  local CHARS_VER; IFS='|' read -r CHARS_VER _ <<< "$CHARS_RAW"
+  local REALM_VER; IFS='|' read -r REALM_VER _ <<< "$REALM_RAW"
+  local LOGS_VER;  IFS='|' read -r LOGS_VER  _ <<< "$LOGS_RAW"
+  local MAPS_VER;  IFS='|' read -r MAPS_VER  _ <<< "$MAPS_RAW"
+  local WEB_VER;   IFS='|' read -r WEB_VER   _ <<< "$WEB_RAW"
 
-  CHARS_RAW=$(get_live_version "/opt/${EXPANSION}_chars_version.spp")
-  IFS='|' read -r CHARS_VER _ <<< "$CHARS_RAW"
-
-  REALM_RAW=$(get_live_version "/opt/${EXPANSION}_realm_version.spp")
-  IFS='|' read -r REALM_VER _ <<< "$REALM_RAW"
-
-  LOGS_RAW=$(get_live_version "/opt/${EXPANSION}_logs_version.spp")
-  IFS='|' read -r LOGS_VER _ <<< "$LOGS_RAW"
-
-  MAPS_RAW=$(get_live_version "/opt/${EXPANSION}_maps_version.spp")
-  IFS='|' read -r MAPS_VER _ <<< "$MAPS_RAW"
-  
-  WEB_RAW=$(get_live_version "/opt/${EXPANSION}_website_version.spp")
-  IFS='|' read -r WEB_VER _ <<< "$WEB_RAW"
-
-  GREEN="\e[32m"
-  RED="\e[31m"
-  YELLOW="\e[33m"
-  RESET="\e[0m"
-
-  EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]:-}"
-  EXPECTED_WORLD="${VERSION_MAP[$EXPANSION:WORLD]:-}"
-
+  local GREEN="\e[32m" RED="\e[31m" YELLOW="\e[33m" RESET="\e[0m"
+  local EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]:-}"
+  local EXPECTED_WORLD="${VERSION_MAP[$EXPANSION:WORLD]:-}"
+  local CORE_COLOR WORLD_COLOR
   [[ "$CORE_VER" == "$EXPECTED_CORE" ]] && CORE_COLOR=$GREEN || CORE_COLOR=$RED
   [[ "$WORLD_VER" == "$EXPECTED_WORLD" ]] && WORLD_COLOR=$GREEN || WORLD_COLOR=$RED
 
   echo -e "Core: ${CORE_COLOR}v${CORE_VER:-NA}${RESET} (${CORE_BRANCH:-?}@${CORE_COMMIT:-?})"
   echo -e "Bots: ${YELLOW}${BOT_BRANCH:-?}@${BOT_COMMIT:-?}${RESET}"
-  echo "Built: ${BUILD_DATE:-unknown}"
+  echo    "Built: ${BUILD_DATE:-unknown}"
   echo -e "World: ${WORLD_COLOR}${WORLD_VER:-NA}${RESET}"
-  echo "Chars: ${CHARS_VER:-NA}  Realm: ${REALM_VER:-NA}  Maps: ${MAPS_VER:-NA}"
-  echo "Web: ${WEB_VER:-NA}  Logs: ${LOGS_VER:-NA}"
-}
-get_live_version() {
-  local FILE=$1
-
-  pct exec "$DB_CTID" -- bash -c "
-    if [[ -f '$FILE' ]]; then
-      cat '$FILE'
-    else
-      echo NOT_INSTALLED
-    fi
-  " 2>/dev/null || echo NOT_INSTALLED
+  echo    "Chars: ${CHARS_VER:-NA}  Realm: ${REALM_VER:-NA}  Maps: ${MAPS_VER:-NA}"
+  echo    "Web: ${WEB_VER:-NA}  Logs: ${LOGS_VER:-NA}"
 }
 
-# ensure_shared_stack() {
-
-  # if [[ -n "$DB_CTID" && -n "$WEB_CTID" && -n "$LOGIN_CTID" ]]; then
-    # return
-  # fi
-
-  # echo
-  # echo "Shared SPP services missing."
-  # read -p "Create shared stack now? (y/n): " CONFIRM
-  # [[ "$CONFIRM" != "y" ]] && return 1
-
-  # pct list
-  # echo
-
-  # read -p "Enter CTID for spp-db: " DB_NEW
-  # read -p "Enter CTID for spp-web: " WEB_NEW
-  # read -p "Enter CTID for spp-login: " LOGIN_NEW
-
-  # create_container "spp-db" "mariadb" "$DB_NEW" 1
-  # create_container "spp-web" "website" "$WEB_NEW" 2
-  # create_container "spp-login" "login" "$LOGIN_NEW" 3
-
-  # auto_detect_stack
-
-  # DB_CTID="$DB_CTID"
-  # WEB_CTID="$WEB_CTID"
-  # LOGIN_CTID="$LOGIN_CTID"
-# }
 
 ensure_shared_stack() {
 
@@ -606,8 +568,11 @@ ensure_game_container() {
 #menus and functions
 
 main() {
+
   while true; do
+  
     expansion_menu
+ 
     service_menu
   done
 }
@@ -629,11 +594,12 @@ expansion_menu() {
       echo
     done
 
-    [[ -n "$EXPANSION" ]] && echo "S - Shared Services"
+    [[ -n "${EXPANSION:-}" ]] && echo "S - Shared Services"
     echo "0 - Exit"
     echo
 
     read -p "Selection: " SEL
+    SEL="${SEL:-}"
 
     [[ "$SEL" == "0" ]] && exit 0
 
@@ -643,10 +609,14 @@ expansion_menu() {
     fi
 
     INDEX=$((SEL-1))
-    EXPANSION="${ALLOWED_EXPANSIONS[$INDEX]}"
-    [[ -n "$EXPANSION" ]] && return
+    if [[ $INDEX -ge 0 && $INDEX -lt ${#ALLOWED_EXPANSIONS[@]} ]]; then
+      EXPANSION="${ALLOWED_EXPANSIONS[$INDEX]}"
+      return
+    fi
   done
 }
+
+	
 shared_services_menu() {
   auto_detect_stack
 
@@ -1294,7 +1264,9 @@ connect_ra() {
 }
 live_logs() {
   echo "Press Ctrl+C to exit live view."
+  trap 'echo; echo "Returning to menu..."; return' INT
   pct exec "$GAME_CTID" -- tail -f /var/log/mangos/Server.log
+  trap - INT
 }
 toggle_autostart() {
 
@@ -1330,7 +1302,7 @@ apply_autostart_setting() {
 
 maintenance_menu() {
   while true; do
-    clear
+    #clear
     print_banner
     echo "Maintenance"
     echo
@@ -1363,7 +1335,7 @@ maintenance_menu() {
 
 core_menu() {
   while true; do
-    clear
+    #clear
     print_banner
 
     echo
@@ -1515,7 +1487,7 @@ write_version "${EXPANSION}_core_version.spp" \
 
 database_menu() {
   while true; do
-    clear
+    #clear
     print_banner
 
     echo
@@ -1849,36 +1821,32 @@ update_db_type() {
 
 install_data() {
   derive_db_names || return 1
-    URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${MAP_KEY}.7z"
+  local URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${MAP_KEY}.7z"
+  local IDIR="/srv/mangos-${EXPANSION}"
 
   pct exec "$GAME_CTID" -- bash -c "
     set -euo pipefail
-INSTALL_DIR="/srv/mangos-${EXPANSION}"
-
-cd "$INSTALL_DIR"
-mkdir -p data
-cd data
-
+    cd '$IDIR'
+    mkdir -p data
+    cd data
     echo 'Downloading map package...'
-    wget -c --show-progress --no-check-certificate \"$URL\" -O ${EXPANSION}.7z
-
+    wget -c --show-progress --no-check-certificate '$URL' -O ${EXPANSION}.7z
     if [[ ! -f ${EXPANSION}.7z ]]; then
       echo 'Download failed.'
       exit 1
     fi
-
     echo 'Extracting...'
     7z x -y ${EXPANSION}.7z >/dev/null
     rm ${EXPANSION}.7z
-
     echo 'Maps ready.'
   "
-MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"
-INSTALL_DATE=$(date +%F_%H:%M)
 
-write_version "${EXPANSION}_maps_version.spp" \
-"${MAP_EXPECTED}|${INSTALL_DATE}"
+  local MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"
+  local INSTALL_DATE
+  INSTALL_DATE=$(date +%F_%H:%M)
+  write_version "${EXPANSION}_maps_version.spp" "${MAP_EXPECTED}|${INSTALL_DATE}"
 }
+
 full_install() {
 
   derive_db_names || return 1
@@ -1934,7 +1902,7 @@ sync_settings_repo() {
 
 stack_control_menu() {
   while true; do
-    clear
+    #clear
     print_banner
     stat_state
     echo
@@ -2048,7 +2016,7 @@ server_info_menu() {
   LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
 
   while true; do
-    clear
+    #clear
     print_banner
     echo
     echo "-------- Server Info --------"
@@ -2065,7 +2033,7 @@ server_info_menu() {
 	echo
     echo "4 - Change Server Address"
     echo "5 - Change Realm Name"
-    echo "6 - Server Logs"
+
     echo "7 - Crash Logs"
     echo
     echo "0 - Back"
@@ -2079,7 +2047,7 @@ server_info_menu() {
 	  3) edit_realmd_settings ;;
       4) change_server_address ;;
       5) change_realm_name ;;
-      6) live_logs ;;
+     
       7) view_crash_logs ;;
       0) return ;;
     esac
@@ -2129,6 +2097,7 @@ view_crash_logs() {
 
 
 
+echo "DEBUG: reaching main" >&2
 
 #program starts here
 main
