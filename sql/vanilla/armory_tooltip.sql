@@ -16,6 +16,7 @@
 -- Step 1: Add new columns (only run once per database! Classic, TBC, maybe WOTLK)
 -- Step 2: Populate new columns with values for specific spell IDs
 -- (Each line updates a single row, keyed by `id`)
+START TRANSACTION;
 ALTER TABLE `dbc_spellitemenchantment`
   ADD COLUMN IF NOT EXISTS `Effect_1` INT NOT NULL DEFAULT '0',
   ADD COLUMN IF NOT EXISTS `Effect_2` INT NOT NULL DEFAULT '0',
@@ -31013,3 +31014,4 @@ UPDATE `dbc_spell` SET `id`=52850, `effect_die_sides_1`=0, `effect_die_sides_2`=
 UPDATE `dbc_spell` SET `id`=52970, `effect_die_sides_1`=0, `effect_die_sides_2`=0, `effect_die_sides_3`=0 WHERE `id`=52970;
 UPDATE `dbc_spell` SET `id`=53082, `effect_die_sides_1`=1, `effect_die_sides_2`=0, `effect_die_sides_3`=0 WHERE `id`=53082;
 UPDATE `dbc_spell` SET `id`=53085, `effect_die_sides_1`=1, `effect_die_sides_2`=0, `effect_die_sides_3`=0 WHERE `id`=53085;
+COMMIT;

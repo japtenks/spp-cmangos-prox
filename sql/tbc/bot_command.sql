@@ -262,10 +262,3 @@ INSERT INTO `bot_command` (`id`, `name`, `security`, `category`, `subcategory`, 
 	(247, '/p @tank go npc <name>', 0, 'Macros', 'Group', 'Command tanks to move to an NPC.'),
 	(248, '/p @tank go zone <location>', 0, 'Macros', 'Group', 'Command tanks to move to a zone.'),
 	(249, '/p @group1 @heal home', 0, 'Macros', 'Group', 'Healers in group 1 set home.');
-/*!40000 ALTER TABLE `bot_command` ENABLE KEYS */;
-
-/*!40103 SET TIME_ZONE=IFNULL(@OLD_TIME_ZONE, 'system') */;
-/*!40101 SET SQL_MODE=IFNULL(@OLD_SQL_MODE, '') */;
-/*!40014 SET FOREIGN_KEY_CHECKS=IFNULL(@OLD_FOREIGN_KEY_CHECKS, 1) */;
-/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
-/*!40111 SET SQL_NOTES=IFNULL(@OLD_SQL_NOTES, 1) */;
