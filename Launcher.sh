@@ -689,7 +689,7 @@ shared_repo_menu() {
   echo
   echo "1 - Reset SQL Repo"
   echo "2 - Update Repo"
-  echo
+  echo "3 - Sagrid-Argus Mods"
   echo "0 - Back"
 
   read -p "Selection: " R
@@ -703,6 +703,7 @@ shared_repo_menu() {
       read -p "Confirm update? (YES): " CONFIRM
       [[ "$CONFIRM" == "YES" ]] && update_repo
       ;;
+	3) install_sagrid_argus;;
   esac
 }
 sync_sql_repo() {
@@ -744,6 +745,48 @@ done
 update_repo() {
   update_sql_repo
   update_settings_repo
+}
+install_sagrid_argus() {
+
+EXPANSION="classic"
+derive_db_names || return 1
+
+ASSET_DIR="/opt/spp-assets/Sagrid-Argus"
+
+echo "Stopping world server..."
+pct exec "$GAME_CTID" -- systemctl stop mangosd || true
+
+echo "Fetching repo..."
+mkdir -p /opt/spp-assets
+cd /opt/spp-assets
+
+if [ ! -d spp-cmangos-prox ]; then
+  git clone --depth 1 --filter=blob:none --sparse https://github.com/japtenks/spp-cmangos-prox.git
+fi
+
+cd spp-cmangos-prox
+git sparse-checkout set Sagrid-Argus
+git pull
+
+echo "Applying SQL..."
+pct exec "$DB_CTID" -- bash -c "
+cd /opt/spp-cmangos-prox/Sagrid-Argus/sql
+for f in \$(ls *.sql | sort); do
+  mariadb -u root ${WORLD_DB} < \$f
+done
+"
+
+echo "Copying DBC..."
+tar -C /opt/spp-assets/spp-cmangos-prox/Sagrid-Argus -cf /tmp/dbc.tar dbc
+pct push "$GAME_CTID" /tmp/dbc.tar /tmp/dbc.tar
+pct exec "$GAME_CTID" -- bash -c "tar -xf /tmp/dbc.tar -C ${INSTALL_DIR}/data && rm /tmp/dbc.tar"
+
+echo "Copying patch..."
+pct exec "$WEB_CTID" -- mkdir -p /var/www/html/downloads/tools
+pct push "$WEB_CTID" /opt/spp-assets/spp-cmangos-prox/Sagrid-Argus/patch/patch-s.mpq /var/www/html/downloads/tools/patch-s.mpq
+
+echo "Starting world server..."
+pct exec "$GAME_CTID" -- systemctl start mangosd
 }
 
 shared_config_menu() {
@@ -1402,7 +1445,7 @@ else
   git clone $REPO source
   cd source
   git checkout ike3-bots
-
+  sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
   mkdir -p src/modules
   cd src/modules
   git clone https://github.com/cmangos/playerbots.git playerbot
@@ -1428,6 +1471,8 @@ cmake .. \
   -DBUILD_MODULE_TRANSMOG=ON \
   -DBUILD_MODULE_DUALSPEC=ON \
   -DBUILD_MODULE_BOOST=ON \
+  -DBUILD_MODULE_CUSTOM20=ON \
+  -DBUILD_MODULE_BALANCING=ON \
   -DBUILD_MODULE_BARBER=ON \
   -DBUILD_MODULE_TRAININGDUMMIES=ON \
   -DBUILD_MODULE_VOICEOVER=ON &&
@@ -1438,13 +1483,15 @@ mkdir -p /var/log/mangos/
 
 update_core_metadata
 
-deploy_realmd
+#deploy_realmd
 update_db_conf
 }
+
 update_core() {
 
 OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
 OLD_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
+
 
 pct exec "$GAME_CTID" -- bash -c "
 set -e
@@ -1452,7 +1499,7 @@ cd /opt/source
 git fetch
 git checkout ike3-bots
 git pull
-
+sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
 cd src/modules/playerbot
 git fetch
 git pull
@@ -1462,11 +1509,17 @@ NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
 NEW_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
 
 if [[ "$OLD_CORE" != "$NEW_CORE" || "$OLD_BOT" != "$NEW_BOT" ]]; then
+  # Stop server before installing
+  pct exec "$GAME_CTID" -- bash -c "systemctl stop mangos || true"
+  
   pct exec "$GAME_CTID" -- bash -c "
   cd /opt/source/build
   make -j\$(nproc)
   make install
   "
+  
+  # Start server again after install
+  pct exec "$GAME_CTID" -- bash -c "systemctl start mangos || true"
 fi
 
 update_core_metadata
