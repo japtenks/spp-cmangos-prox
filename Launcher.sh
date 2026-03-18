@@ -183,6 +183,7 @@ WOTLK_LOGS_VERSION=1
 WOTLK_BOTS_VERSION=17
 WOTLK_WEBSITE_VERSION=6
 WOTLK_MAPS_VERSION=2
+MASTER_EXPANSION=""
 EOF
   echo "config.env created."
 fi
@@ -301,12 +302,17 @@ CMD=(
   "
 
   case "$ROLE_TYPE" in
-    mariadb)
-      pct exec "$CTID" -- apt install -y mariadb-server git p7zip-full
-      pct exec "$CTID" -- systemctl enable mariadb
-      DB_HOST=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
-      sed -i "s/^DB_HOST=.*/DB_HOST=\"$DB_HOST\"/" "$CONFIG_FILE"
-      ;;
+mariadb)
+  pct exec "$CTID" -- apt install -y mariadb-server git p7zip-full
+  pct exec "$CTID" -- systemctl enable mariadb
+  # Fix bind address immediately so it's never on 127.0.0.1
+  pct exec "$CTID" -- bash -c "
+    sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+    systemctl restart mariadb
+  "
+  DB_HOST=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
+  sed -i "s/^DB_HOST=.*/DB_HOST=\"$DB_HOST\"/" "$CONFIG_FILE"
+  ;;
     website)
       pct exec "$CTID" -- bash -c "
       set -e
@@ -374,41 +380,51 @@ ensure_web_template() {
 
 derive_db_names() {
   case "$EXPANSION" in
-    classic)
-      DB_KEY="classic"
-      MAP_KEY="vanilla"
-      ;;
-    tbc)
-      DB_KEY="tbc"
-      MAP_KEY="tbc"
-      ;;
-    wotlk)
-      DB_KEY="wotlk"
-      MAP_KEY="wotlk"
-      ;;
-    *)
-      echo "Unknown expansion"
-      return 1
-      ;;
+    classic) DB_KEY="classic"; MAP_KEY="vanilla" ;;
+    tbc)     DB_KEY="tbc";     MAP_KEY="tbc" ;;
+    wotlk)   DB_KEY="wotlk";   MAP_KEY="wotlk" ;;
+    *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
   esac
 
   WORLD_DB="${DB_KEY}mangos"
   CHAR_DB_NAME="${DB_KEY}characters"
-  REALM_DB_NAME="${DB_KEY}realmd"
   LOG_DB_NAME="${DB_KEY}logs"
-  
+
+  # Realm DB always belongs to master expansion
+  # Falls back to current expansion if master not yet set (first install)
+  local MASTER="${MASTER_EXPANSION:-$EXPANSION}"
+  case "$MASTER" in
+    classic) REALM_DB_NAME="classicrealmd" ;;
+    tbc)     REALM_DB_NAME="tbcrealmd" ;;
+    wotlk)   REALM_DB_NAME="wotlkrealmd" ;;
+    *) echo "Unknown master expansion: $MASTER"; return 1 ;;
+  esac
+
   case "$EXPANSION" in
-  classic) INSTALL_DIR="/srv/mangos-classic" ;;
-  tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-  wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-  *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
-esac
-case "$EXPANSION" in
-  classic) REALM_ID=1 ;;
-  tbc)     REALM_ID=2 ;;
-  wotlk)   REALM_ID=3 ;;
-  *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
-esac
+    classic) INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+  esac
+
+  case "$EXPANSION" in
+    classic) REALM_ID=1 ;;
+    tbc)     REALM_ID=2 ;;
+    wotlk)   REALM_ID=3 ;;
+  esac
+}
+
+pin_master_expansion() {
+  if [[ -z "${MASTER_EXPANSION:-}" ]]; then
+    MASTER_EXPANSION="$EXPANSION"
+    sed -i "s/^MASTER_EXPANSION=.*/MASTER_EXPANSION=\"$MASTER_EXPANSION\"/" "$CONFIG_FILE"
+    echo "Pinned master expansion: $MASTER_EXPANSION"
+  else
+    echo "Master expansion already pinned: $MASTER_EXPANSION"
+  fi
+}
+
+is_master() {
+  [[ "${EXPANSION}" == "${MASTER_EXPANSION:-}" ]]
 }
 
 write_version() {
@@ -417,7 +433,6 @@ write_version() {
   pct exec "$DB_CTID" -- bash -c "echo \"$VALUE\" > /opt/$FILE"
 }
 
-#unsed atm
 update_world() {
 
   derive_db_names || return 1
@@ -456,19 +471,24 @@ update_world() {
 create_lan_db_user() {
   derive_db_names || return 1
 
-  ARMORY_DB="${EXPANSION}armory"
-  pct exec "$DB_CTID" -- bash -c "
-  export MYSQL_PWD='${DB_ROOT_PASS}'
+  local ARMORY_DB="${EXPANSION}armory"
 
-  mariadb -u root -e \"
-  CREATE USER IF NOT EXISTS '${DB_LAN_USER}'@'${DB_LAN_HOST}' IDENTIFIED BY '${DB_LAN_PASS}';
-  GRANT ALL PRIVILEGES ON ${WORLD_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
-  GRANT ALL PRIVILEGES ON ${CHAR_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
-  GRANT ALL PRIVILEGES ON ${REALM_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
-  GRANT ALL PRIVILEGES ON ${LOG_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
-  GRANT ALL PRIVILEGES ON ${ARMORY_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
-  FLUSH PRIVILEGES;
-  \"
+  # Build the GRANT list — always include this expansion's DBs
+  local GRANTS="
+    CREATE USER IF NOT EXISTS '${DB_LAN_USER}'@'${DB_LAN_HOST}' IDENTIFIED BY '${DB_LAN_PASS}';
+    GRANT ALL PRIVILEGES ON ${WORLD_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+    GRANT ALL PRIVILEGES ON ${CHAR_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+    GRANT ALL PRIVILEGES ON ${LOG_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+    GRANT ALL PRIVILEGES ON ${ARMORY_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+  "
+
+  # Always grant realm DB access (shared, owned by master)
+  GRANTS+="GRANT ALL PRIVILEGES ON ${REALM_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';"
+  GRANTS+="FLUSH PRIVILEGES;"
+
+  pct exec "$DB_CTID" -- bash -c "
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    mariadb -u root -e \"${GRANTS}\"
   "
 }
 
@@ -887,49 +907,70 @@ shared_config_menu() {
   esac
 }
 update_db_conf() {
-if [[ -z "${EXPANSION:-}" ]]; then
-  echo "Select expansion:"
-  select EXP in classic tbc wotlk; do
-    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-  done
-fi
   derive_db_names || return 1
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
-  # Update realmd.conf (login LXC)
-  pct exec "$LOGIN_CTID" -- bash -c "
-  sed -i \
-  's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
-  ${INSTALL_DIR}/etc/realmd.conf
-  "
+  # realmd.conf — master only, once
+  local MASTER_INSTALL_DIR
+  case "$MASTER_EXPANSION" in
+    classic) MASTER_INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     MASTER_INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   MASTER_INSTALL_DIR="/srv/mangos-wotlk" ;;
+  esac
 
-for EXP in "${!GAME_CTIDS[@]}"; do
-  GAME_CTID="${GAME_CTIDS[$EXP]}"
-  MAP_KEY="$EXP"
-  derive_db_names || continue
+  if pct exec "$LOGIN_CTID" -- test -f "${MASTER_INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
+    pct exec "$LOGIN_CTID" -- bash -c "
+      sed -i \
+      's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+      ${MASTER_INSTALL_DIR}/etc/realmd.conf
+    "
+    echo "realmd.conf updated."
+  else
+    echo "realmd.conf not found — running RealmD Install first..."
+    local SAVED_EXP="$EXPANSION"
+    EXPANSION="$MASTER_EXPANSION"
+    derive_db_names || return 1
+    deploy_realmd || return 1
+    EXPANSION="$SAVED_EXP"
+    derive_db_names || return 1
+    pct exec "$LOGIN_CTID" -- bash -c "
+      sed -i \
+      's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+      ${MASTER_INSTALL_DIR}/etc/realmd.conf
+    "
+    echo "realmd.conf updated."
+  fi
 
-  pct exec "$GAME_CTID" -- bash -c "
-  sed -i \
-  -e 's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
-  -e 's|^WorldDatabaseInfo *=.*|WorldDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
-  -e 's|^CharacterDatabaseInfo *=.*|CharacterDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
-  -e 's|^LogsDatabaseInfo *=.*|LogsDatabaseInfo      = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
-  ${INSTALL_DIR}/etc/mangosd.conf
-  "
-done
+  # mangosd.conf — loop all installed expansions
+  for EXP in "${!GAME_CTIDS[@]}"; do
+    GAME_CTID="${GAME_CTIDS[$EXP]}"
+    EXPANSION="$EXP"
+    derive_db_names || continue
+
+    pct exec "$GAME_CTID" -- bash -c "
+      sed -i \
+      -e 's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+      -e 's|^WorldDatabaseInfo *=.*|WorldDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+      -e 's|^CharacterDatabaseInfo *=.*|CharacterDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+      -e 's|^LogsDatabaseInfo *=.*|LogsDatabaseInfo      = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+      ${INSTALL_DIR}/etc/mangosd.conf
+    "
+    echo "${EXP} mangosd.conf updated."
+  done
 }
 service_create() {
-if [[ -z "${EXPANSION:-}" ]]; then
-  echo "Select expansion:"
-  select EXP in classic tbc wotlk; do
-    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-  done
-fi
-derive_db_names
+  if [[ -z "${EXPANSION:-}" ]]; then
+    echo "Select expansion:"
+    select EXP in classic tbc wotlk; do
+      [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+    done
+  fi
+  derive_db_names
 
-  # realmd
-  pct exec "$LOGIN_CTID" -- bash -c "
+  # realmd service only written/reloaded on master expansion
+  if is_master; then
+    pct exec "$LOGIN_CTID" -- bash -c "
 cat > /etc/systemd/system/realmd.service <<EOF
 [Unit]
 Description=CMaNGOS Realmd
@@ -947,14 +988,17 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 "
+    pct exec "$LOGIN_CTID" -- systemctl daemon-reload
+    echo "realmd service written for master: $MASTER_EXPANSION"
+  else
+    echo "Skipping realmd service — master is ${MASTER_EXPANSION}, not touching login container service."
+  fi
 
-  pct exec "$LOGIN_CTID" -- systemctl daemon-reload
-
-  # mangosd
+  # mangosd service always written for this expansion's game container
   pct exec "$GAME_CTID" -- bash -c "
 cat > /etc/systemd/system/mangosd.service <<EOF
 [Unit]
-Description=CMaNGOS World Server
+Description=CMaNGOS World Server ($EXPANSION)
 After=network.target
 
 [Service]
@@ -969,48 +1013,39 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 "
-
   pct exec "$GAME_CTID" -- systemctl daemon-reload
 
-
-apply_autostart_setting
+  apply_autostart_setting
 }
 fix_realm_entry() {
+  if [[ -z "${EXPANSION:-}" ]]; then
+    echo "Select expansion:"
+    select EXP in classic tbc wotlk; do
+      [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
+    done
+  fi
 
-if [[ -z "${EXPANSION:-}" ]]; then
-  echo "Select expansion:"
-  select EXP in classic tbc wotlk; do
-    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-  done
-fi
+  derive_db_names || return 1
 
-derive_db_names || return 1
+  LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
 
-LOGIN_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+  pct exec "$DB_CTID" -- bash -c "
+    export MYSQL_PWD='${DB_ROOT_PASS}'
 
-pct exec "$DB_CTID" -- bash -c "
-export MYSQL_PWD='${DB_ROOT_PASS}'
+    mariadb -u root ${REALM_DB_NAME} -e \"
+      DELETE FROM realmlist WHERE id=${REALM_ID};
+      DELETE FROM realmlist WHERE name='SPP-${EXPANSION^}';
 
-mariadb -u root ${REALM_DB_NAME} -e \"
-DELETE FROM realmlist WHERE id=${REALM_ID};
-DELETE FROM realmlist WHERE name='SPP-${EXPANSION^}';
+      INSERT INTO realmlist
+        (id, name, address, port, icon, realmflags, timezone, allowedSecurityLevel)
+      VALUES
+        (${REALM_ID}, 'SPP-${EXPANSION^}', '${LOGIN_IP}', 8085, 1, 0, 1, 0);
+    \"
+  "
 
-INSERT INTO realmlist
-(id,name,address,port,icon,realmflags,timezone,allowedSecurityLevel)
-VALUES
-(${REALM_ID},'SPP-${EXPANSION^}','${LOGIN_IP}',8085,1,0,1,0);
-
-DELETE FROM realmbuilds WHERE realmId=${REALM_ID};
-
-INSERT INTO realmbuilds (realmId,build)
-VALUES
-(${REALM_ID},5875),
-(${REALM_ID},8606),
-(${REALM_ID},12340);
-\"
-"
-
+  echo "Realm entry updated for ${EXPANSION^} (ID: ${REALM_ID}) in ${REALM_DB_NAME}."
 }
+
 fix_mariadb_bind() {
 auto_detect_stack
   derive_db_names || return 1
@@ -1058,27 +1093,45 @@ cp -f \$CONF_DIR/*.conf $INSTALL_DIR/etc/
 "
 }
 deploy_realmd() {
+  deploy_spp_configs || return 1
 
-deploy_spp_configs || return 1
-case "$EXPANSION" in
-  classic) INSTALL_DIR="/srv/mangos-classic" ;;
-  tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-  wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-esac
+  case "$EXPANSION" in
+    classic) INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+  esac
 
-pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/bin"
-pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/etc"
+  # Only deploy realmd binary if we are the master expansion
+  if ! is_master; then
+    echo "Skipping realmd binary deploy — master is ${MASTER_EXPANSION}."
+    echo "realmd on spp-login already serves all expansions."
+    return 0
+  fi
 
-if ! pct exec "$GAME_CTID" -- test -f "$INSTALL_DIR/bin/realmd"; then
-  echo "ERROR: realmd binary not found."
-  return 1
-fi
+  pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/bin"
+  pct exec "$LOGIN_CTID" -- mkdir -p "$INSTALL_DIR/etc"
 
-pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR" -cf - bin/realmd | \
-pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR" -xf -
+  if ! pct exec "$GAME_CTID" -- test -f "$INSTALL_DIR/bin/realmd"; then
+    echo "ERROR: realmd binary not found in $INSTALL_DIR/bin on $EXPANSION game container."
+    return 1
+  fi
 
-pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR/etc" -cf - realmd.conf.dist | \
-pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR/etc" -xf -
+  echo "Copying realmd binary to login container..."
+  pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR" -cf - bin/realmd | \
+  pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR" -xf -
+
+  # Copy .dist then promote to .conf if not already present
+  pct exec "$GAME_CTID" -- tar -C "$INSTALL_DIR/etc" -cf - realmd.conf.dist | \
+  pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR/etc" -xf -
+
+  pct exec "$LOGIN_CTID" -- bash -c "
+    if [ ! -f $INSTALL_DIR/etc/realmd.conf ]; then
+      cp $INSTALL_DIR/etc/realmd.conf.dist $INSTALL_DIR/etc/realmd.conf
+      echo 'Created realmd.conf from .dist'
+    else
+      echo 'realmd.conf already exists, skipping.'
+    fi
+  "
 }
 
 shared_website_menu() {
@@ -1102,31 +1155,23 @@ shared_website_menu() {
 install_website() {
   derive_db_names || return 1
 
+  if ! is_master; then
+    echo "Website is pinned to master expansion: ${MASTER_EXPANSION}."
+    echo "To change the active world shown on the website, use 'Website' -> 'Switch Active World'."
+    read -p "Press Enter to continue..."
+    return 0
+  fi
+
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
-  case "$EXPANSION" in
-    classic)
-      REALM_DB="classicrealmd"
-      WORLD_DB="classicmangos"
-      ;;
-    tbc)
-      REALM_DB="tbcrealmd"
-      WORLD_DB="tbcmangos"
-      ;;
-    wotlk)
-      REALM_DB="wotlkrealmd"
-      WORLD_DB="wotlkmangos"
-      ;;
-  esac
 
   echo
-  echo "Installing Custom Armory Website..."
+  echo "Installing Website (master: ${MASTER_EXPANSION})..."
   echo
 
   pct exec "$WEB_CTID" -- bash -c "
     set -e
     rm -rf /var/www/html
     git clone --depth 1 https://github.com/japtenks/SPP-Armory-Website.git /var/www/html
-
     chown -R www-data:www-data /var/www/html
     chmod -R 755 /var/www/html
   "
@@ -1139,181 +1184,100 @@ install_website() {
   install_website_db
   web_config
 
-WEB_EXPECTED="${VERSION_MAP[$EXPANSION:WEBSITE]}"
-INSTALL_DATE=$(date +%F_%H:%M)
-
-write_version "${EXPANSION}_website_version.spp" \
-"${WEB_EXPECTED}|${INSTALL_DATE}"
+  local WEB_EXPECTED="${VERSION_MAP[$EXPANSION:WEBSITE]}"
+  local INSTALL_DATE
+  INSTALL_DATE=$(date +%F_%H:%M)
+  write_version "${MASTER_EXPANSION}_website_version.spp" "${WEB_EXPECTED}|${INSTALL_DATE}"
 
   echo
   echo "Website installed."
   echo
-read -p "Press Enter to continue..."
-
+  read -p "Press Enter to continue..."
 }
-install_website_db() {
 
+install_website_db() {
   derive_db_names || return 1
 
-  case "$EXPANSION" in
-    classic) SQL_EXP="vanilla" ;;
-    tbc)     SQL_EXP="tbc" ;;
-    wotlk)   SQL_EXP="wotlk" ;;
-  esac
+  if is_master; then
+    echo "Installing website tables into ${REALM_DB_NAME}..."
+    if pct exec "$DB_CTID" -- bash -c "
+      export MYSQL_PWD='${DB_ROOT_PASS}'
+      BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
 
-  TARGET_DB="$REALM_DB"
-  BASE="/opt/spp-sql/sql/${SQL_EXP}"
-  VERSION_FILE="/opt/${EXPANSION}_website_version.spp"
-
-  echo "Installing Website DB..."
-
-  pct exec "$DB_CTID" -- bash -c "
-   
-    cd $BASE
-
-    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website.sql
-	mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < website_news.sql
-  "
-    echo "Website DB installed."
-    TARGET_DB="${EXPANSION}armory"
-    echo "Installing ${EXPANSION}armory DB..."
-	 
-    pct exec "$DB_CTID" -- bash -c "
-  
-    cd $BASE
-
-    if [ ! -f armory.7z ]; then
-      echo 'armory.7z not found.'
-      exit 1
+      mariadb -u root \"${REALM_DB_NAME}\" < \"\$BASE/website.sql\"
+      mariadb -u root \"${REALM_DB_NAME}\" < \"\$BASE/website_news.sql\"
+    "; then
+      echo "Website tables installed successfully."
+    else
+      echo "Website tables install FAILED."
+      return 1
     fi
+  else
+    echo "Skipping website.sql — master is ${MASTER_EXPANSION}."
+  fi
 
-    7z x -y armory.7z >/dev/null
+  echo "Adding support tables to ${EXPANSION}armory..."
+  if pct exec "$DB_CTID" -- bash -c "
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
 
-    mariadb -u root -p$DB_ROOT_PASS < armory.sql
-	mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < armory_tooltip.sql
-    mariadb -u root -p$DB_ROOT_PASS $TARGET_DB < bot_command.sql
-    rm -f armory.sql
+    mariadb -u root \"${EXPANSION}armory\" < \"\$BASE/armory_tooltip.sql\"
+    mariadb -u root \"${EXPANSION}armory\" < \"\$BASE/bot_command.sql\"
+  "; then
+    echo "${EXPANSION} armory support tables installed successfully."
+  else
+    echo "${EXPANSION} armory support tables FAILED."
+    return 1
+  fi
+}
+  
+update_website() {
+  echo
+  echo "Updating Website..."
+  echo
+
+  pct exec "$WEB_CTID" -- bash -c "
+    set -e
+    if [ ! -d /opt/SPP-Armory-Website ]; then
+      git clone https://github.com/japtenks/SPP-Armory-Website /opt/SPP-Armory-Website
+    fi
+    cd /opt/SPP-Armory-Website
+    git fetch origin
+    git reset --hard origin/HEAD
+
+    rsync -a --delete \
+      --exclude 'config/config-protected.php' \
+      ./ /var/www/html/
+
+    chown -R www-data:www-data /var/www/html
+    chmod -R 755 /var/www/html
+    systemctl restart apache2
   "
 
-  pct exec "$DB_CTID" -- bash -c "echo 0 > $VERSION_FILE"
+  echo
+  echo "Website updated. Re-applying config..."
+  echo
 
-  echo "Armory DB installed."
+  web_config
 }
-update_website() {
+web_config() {
+  derive_db_names || return 1
 
-derive_db_names || return 1
-DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+  local DB_IP
+  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+    local WEB_IP
+  WEB_IP=$(pct exec "$WEB_CTID" -- hostname -I | awk '{print $1}')
 
-  echo
-  echo "Updating Custom Armory Website..."
-  echo
+  pct exec "$WEB_CTID" -- bash -c "
+    FILE=/var/www/html/config/config-protected.php
+    sed -i \"s|'host' => '.*'|'host' => '${DB_IP}'|\"       \$FILE
+    sed -i \"s|'port' => .*,|'port' => 3306,|\"             \$FILE
+    sed -i \"s|'user' => '.*'|'user' => '${DB_LAN_USER}'|\" \$FILE
+    sed -i \"s|'pass' => '.*'|'pass' => '${DB_LAN_PASS}'|\" \$FILE
+  "
 
-pct exec "$WEB_CTID" -- bash -c "
-set -e
-
-if [ ! -d /opt/SPP-Armory-Website ]; then
-  git clone https://github.com/japtenks/SPP-Armory-Website /opt/SPP-Armory-Website
-fi
-
-cd /opt/SPP-Armory-Website
-git fetch origin
-git reset --hard origin/HEAD
-
-rsync -a --delete \
-  --exclude 'config/' \
-  --exclude 'armory/configuration/mysql.php' \
-  --exclude 'config/playermap_config.php' \
-  ./ /var/www/html/
-
-chown -R www-data:www-data /var/www/html
-chmod -R 755 /var/www/html
-systemctl restart apache2
-"
-
-
-  echo
-  echo "Website updated."
-  echo
-read -p "Press Enter to continue..."
-
-LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
-
-pct exec "$WEB_CTID" -- bash -c "
-set -e
-sed -i 's/set Realmlist \"[^\"]*\"/set Realmlist \"$LOGIN_IP\"/' /var/www/html/lang/howtoplay/en.html
-"  
-
-pct exec "$WEB_CTID" -- bash -c "
-for FILE in \
-/var/www/html/xfer/includes/com_db.php \
-/var/www/html/xfer/includes/realm_db.php
-do
-  sed -i \"s|'host' => '127.0.0.1'|'host' => '$DB_IP'|\" \$FILE
-  sed -i \"s|'port' => 3310|'port' => 3306|\" \$FILE
-  sed -i \"s|'user' => 'root'|'user' => '$DB_LAN_USER'|\" \$FILE
-  sed -i \"s|'pass' => '123456'|'pass' => '$DB_LAN_PASS'|\" \$FILE
-done
-"
-  echo
-  echo "Ip address updated."
-  echo
-read -p "Press Enter to continue..."
-}
-web_config(){
-
-derive_db_names || return 1
-DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
-
-case "$EXPANSION" in
-  classic) REALM_DB="classicrealmd"; WORLD_DB="classicmangos" ;;
-  tbc)     REALM_DB="tbcrealmd";     WORLD_DB="tbcmangos" ;;
-  wotlk)   REALM_DB="wotlkrealmd";   WORLD_DB="wotlkmangos" ;;
-esac
-
-pct exec "$WEB_CTID" -- bash -c "cat > /var/www/html/config/config-protected.php" <<EOF
-<?php
-\$realmd = array(
-'db_type' => 'mysql',
-'db_host' => '$DB_IP',
-'db_port' => '3306',
-'db_username' => '$DB_LAN_USER',
-'db_password' => '$DB_LAN_PASS',
-'db_name' => '$REALM_DB',
-'db_encoding' => 'utf8',
-);
-
-\$worlddb = array(
-'db_type' => 'mysql',
-'db_host' => '$DB_IP',
-'db_port' => '3306',
-'db_username' => '$DB_LAN_USER',
-'db_password' => '$DB_LAN_PASS',
-'db_name' => '$WORLD_DB',
-'db_encoding' => 'utf8',
-);
-
-\$DB = \$worlddb;
-?>
-EOF
-
-pct exec "$WEB_CTID" -- bash -c "
-FILE=/var/www/html/armory/configuration/mysql.php
-sed -i 's|127.0.0.1:3310|$DB_IP:3306|g' \$FILE
-sed -i 's|\"root\"|\"$DB_LAN_USER\"|g' \$FILE
-sed -i 's|\"123456\"|\"$DB_LAN_PASS\"|g' \$FILE
-"
-
-pct exec "$WEB_CTID" -- bash -c "
-FILE=/var/www/html/components/pomm/config/playermap_config.php
-sed -i 's|127.0.0.1:3310|$DB_IP:3306|g' \$FILE
-sed -i 's|127.0.0.1:3306|$DB_IP:3306|g' \$FILE
-sed -i 's|\"root\"|\"$DB_LAN_USER\"|g' \$FILE
-sed -i 's|\"123456\"|\"$DB_LAN_PASS\"|g' \$FILE
-"
-
-pct exec "$WEB_CTID" -- sed -i "s|127.0.0.1:3306|$DB_IP:3306|g" /var/www/html/config/playermap_config.php
-
-read -p "Press enter to continue..."
+  echo "Web config updated — Bookmark website at http://${WEB_IP}"
+  read -p "Press Enter to continue..."
 }
 
 service_menu() {
@@ -1426,9 +1390,9 @@ maintenance_menu() {
     echo "1 - Core"
     echo "2 - Database"
     echo "3 - (re)Install Data Pack"
-    echo
+    echo "4 - Config Settings"
     echo "I - Full (re)Install"
-    echo "U - Update Setting Repo"	
+    echo "S - Setting Repo"	
     echo "0 - Back"
     echo
 
@@ -1438,18 +1402,230 @@ maintenance_menu() {
       1) core_menu ;;
       2) database_menu ;;
       3) install_data ;;
+	  4) config_menu ;;
       I)
         read -p "Type YES to continue: " CONFIRM
         [[ "$CONFIRM" == "YES" ]] && full_install
         ;;
-	  U)
-	    read -p "Type YES to continue: " CONFIRM
+	  S) 	 
+        read -p "Type YES to continue: " CONFIRM
         [[ "$CONFIRM" == "YES" ]] && sync_settings_repo ;;
       0) return ;;
     esac
   done
 }
+config_menu() {
+  while true; do
+    print_banner
+    echo "Config Settings"
+    echo
+    # Show current mode if we can detect it
+    echo "1 - Apply Stock Settings"
+    echo "2 - Apply Sagrids Settings"
+    echo "3 - Apply Custom Settings (prompted)"
+    echo "0 - Back"
+    echo
+    read -p "Selection: " CSEL
+    case "$CSEL" in
+      1) apply_config "stock" ;;
+      2) apply_config "sagrids" ;;
+      3) apply_config_prompted ;;
+      0) return ;;
+    esac
+  done
+}
+apply_config() {
+  local MODE=$1
+  local CONF_DIR="/srv/mangos-${EXPANSION}/etc"
+  local CONF="$CONF_DIR/aiplayerbot.conf"
 
+  # Check server is stopped
+  if pct exec "$GAME_CTID" -- systemctl is-active mangosd &>/dev/null; then
+    echo "ERROR: Server is still running. Stop the server before changing settings."
+    read -p "Press Enter to continue..."
+    return
+  fi
+
+  # Confirm
+  echo
+  echo "Applying $MODE settings to aiplayerbot.conf"
+  read -p "Confirm? (YES): " CONFIRM
+  [[ "$CONFIRM" != "YES" ]] && return
+
+  # Backup - find next available backup number
+  local BKUP_NUM=1
+  while pct exec "$GAME_CTID" -- test -f "${CONF}.bkup${BKUP_NUM}"; do
+    ((BKUP_NUM++))
+  done
+  pct exec "$GAME_CTID" -- cp "$CONF" "${CONF}.bkup${BKUP_NUM}"
+  echo "Backup saved as aiplayerbot.conf.bkup${BKUP_NUM}"
+
+  if [[ "$MODE" == "stock" ]]; then
+    pct exec "$GAME_CTID" -- bash -c "
+      sed -i 's/^AiPlayerbot\.DisableBotOptimizations.*/AiPlayerbot.DisableBotOptimizations = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.DisableActivityPriorities.*/AiPlayerbot.DisableActivityPriorities = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.DisableRandomLevels.*/AiPlayerbot.DisableRandomLevels = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.XPRate.*/AiPlayerbot.XPRate = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomGearMaxLevel.*/AiPlayerbot.RandomGearMaxLevel = 500/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomGearMaxDiff.*/AiPlayerbot.RandomGearMaxDiff = 9/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomGearUpgradeEnabled.*/AiPlayerbot.RandomGearUpgradeEnabled = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotMaps.*/AiPlayerbot.RandomBotMaps = 0,1,530,571/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotTeleportTeleportMinInterval.*/AiPlayerbot.RandomBotTeleportTeleportMinInterval = 7200/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotRpgChance.*/AiPlayerbot.RandomBotRpgChance = 0.20/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotGuildCount.*/AiPlayerbot.RandomBotGuildCount = 20/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotArenaTeamCount.*/AiPlayerbot.RandomBotArenaTeamCount = 20/' $CONF
+      sed -i 's/^AiPlayerbot\.DeleteRandomBotArenaTeams.*/AiPlayerbot.DeleteRandomBotArenaTeams = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.EnableGreet.*/AiPlayerbot.EnableGreet = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotAccountCount.*/AiPlayerbot.RandomBotAccountCount = 200/' $CONF
+    "
+
+  elif [[ "$MODE" == "custom" ]]; then
+    pct exec "$GAME_CTID" -- bash -c "
+      sed -i 's/^AiPlayerbot\.DisableBotOptimizations.*/AiPlayerbot.DisableBotOptimizations = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.DisableActivityPriorities.*/AiPlayerbot.DisableActivityPriorities = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.DisableRandomLevels.*/AiPlayerbot.DisableRandomLevels = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.XPRate.*/AiPlayerbot.XPRate = 4/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomGearMaxLevel.*/AiPlayerbot.RandomGearMaxLevel = 50/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomGearMaxDiff.*/AiPlayerbot.RandomGearMaxDiff = 20/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomGearUpgradeEnabled.*/AiPlayerbot.RandomGearUpgradeEnabled = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotMaps.*/AiPlayerbot.RandomBotMaps = 0,1/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotTeleportTeleportMinInterval.*/AiPlayerbot.RandomBotTeleportTeleportMinInterval = 86400/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotRpgChance.*/AiPlayerbot.RandomBotRpgChance = 0.5/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotGuildCount.*/AiPlayerbot.RandomBotGuildCount = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotArenaTeamCount.*/AiPlayerbot.RandomBotArenaTeamCount = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.DeleteRandomBotArenaTeams.*/AiPlayerbot.DeleteRandomBotArenaTeams = 1/' $CONF
+      sed -i 's/^AiPlayerbot\.EnableGreet.*/AiPlayerbot.EnableGreet = 0/' $CONF
+      sed -i 's/^AiPlayerbot\.RandomBotAccountCount.*/AiPlayerbot.RandomBotAccountCount = 500/' $CONF
+    "
+  fi
+
+  echo "Done. Settings applied successfully."
+  echo
+  read -p "Start server now? (Y/N): " START
+  if [[ "$START" == "Y" ]]; then
+    pct exec "$GAME_CTID" -- systemctl start mangosd
+    echo "Server started."
+  fi
+  read -p "Press Enter to continue..."
+}
+
+apply_config_prompted() {
+  local CONF_DIR="/srv/mangos-${EXPANSION}/etc"
+  local CONF="$CONF_DIR/aiplayerbot.conf"
+
+  # Check server is stopped
+  if pct exec "$GAME_CTID" -- systemctl is-active mangosd &>/dev/null; then
+    echo "ERROR: Server is still running. Stop the server before changing settings."
+    read -p "Press Enter to continue..."
+    return
+  fi
+
+  echo
+  echo "Custom Config - Prompted"
+  echo "For each setting enter S (Stock) or C (Custom/Sagrids)"
+  echo
+  echo "Stock values shown first, Sagrids values shown second."
+  echo
+
+  # Collect all choices first
+  declare -A CHOICES
+
+  prompt_setting() {
+    local KEY=$1
+    local STOCK=$2
+    local CUSTOM=$3
+    local DESC=$4
+    while true; do
+      echo "  $DESC"
+      echo "    S = $STOCK"
+      echo "    C = $CUSTOM"
+      read -p "  Choice [S/C]: " CHOICE
+      CHOICE="${CHOICE^^}"
+      if [[ "$CHOICE" == "S" || "$CHOICE" == "C" ]]; then
+        CHOICES[$KEY]=$CHOICE
+        break
+      fi
+      echo "  Invalid input, enter S or C"
+    done
+    echo
+  }
+
+  prompt_setting "DisableBotOptimizations"          "0"         "1"      "DisableBotOptimizations    (0=off, 1=all bots always active)"
+  prompt_setting "DisableActivityPriorities"        "0"         "1"      "DisableActivityPriorities  (0=off, 1=ignore activity priorities)"
+  prompt_setting "DisableRandomLevels"              "0"         "1"      "DisableRandomLevels        (0=random levels, 1=bots level naturally)"
+  prompt_setting "XPRate"                           "1"         "4"      "XPRate                     (1=normal, 4=4x XP for bots)"
+  prompt_setting "RandomGearMaxLevel"               "500"       "50"     "RandomGearMaxLevel          (500=no cap, 50=progression cap)"
+  prompt_setting "RandomGearMaxDiff"                "9"         "20"     "RandomGearMaxDiff           (9=strict, 20=looser gear diff)"
+  prompt_setting "RandomGearUpgradeEnabled"         "0"         "1"      "RandomGearUpgradeEnabled    (0=off, 1=bots upgrade gear over time)"
+  prompt_setting "RandomBotMaps"                    "0,1,530,571" "0,1"  "RandomBotMaps               (all maps vs Classic only)"
+  prompt_setting "RandomBotTeleportMinInterval"     "7200"      "86400"  "TeleportMinInterval         (7200=2hrs, 86400=24hrs)"
+  prompt_setting "RandomBotRpgChance"               "0.20"      "0.5"    "RandomBotRpgChance          (0.20=less RPG, 0.5=more RPG)"
+  prompt_setting "RandomBotGuildCount"              "20"        "0"      "RandomBotGuildCount         (20=bot guilds, 0=none)"
+  prompt_setting "RandomBotArenaTeamCount"          "20"        "0"      "RandomBotArenaTeamCount     (20=arena teams, 0=none)"
+  prompt_setting "DeleteRandomBotArenaTeams"        "0"         "1"      "DeleteRandomBotArenaTeams   (0=keep, 1=delete)"
+  prompt_setting "EnableGreet"                      "1"         "0"      "EnableGreet                 (1=bots greet players, 0=silent)"
+  prompt_setting "RandomBotAccountCount"            "200"       "500"    "RandomBotAccountCount       (200=stock, 500=sagrids)"
+
+  # Summary
+  echo
+  echo "========================================"
+  echo " Summary of your choices:"
+  echo "========================================"
+  for KEY in "${!CHOICES[@]}"; do
+    echo "  $KEY = ${CHOICES[$KEY]}"
+  done
+  echo
+  read -p "Apply these settings? (YES): " CONFIRM
+  [[ "$CONFIRM" != "YES" ]] && return
+
+  # Backup
+  local BKUP_NUM=1
+  while pct exec "$GAME_CTID" -- test -f "${CONF}.bkup${BKUP_NUM}"; do
+    ((BKUP_NUM++))
+  done
+  pct exec "$GAME_CTID" -- cp "$CONF" "${CONF}.bkup${BKUP_NUM}"
+  echo "Backup saved as aiplayerbot.conf.bkup${BKUP_NUM}"
+
+  # Build sed values based on choices
+  get_value() {
+    local KEY=$1
+    local STOCK=$2
+    local CUSTOM=$3
+    if [[ "${CHOICES[$KEY]}" == "S" ]]; then
+      echo "$STOCK"
+    else
+      echo "$CUSTOM"
+    fi
+  }
+
+  pct exec "$GAME_CTID" -- bash -c "
+    sed -i 's/^AiPlayerbot\.DisableBotOptimizations.*/AiPlayerbot.DisableBotOptimizations = $(get_value DisableBotOptimizations 0 1)/' $CONF
+    sed -i 's/^AiPlayerbot\.DisableActivityPriorities.*/AiPlayerbot.DisableActivityPriorities = $(get_value DisableActivityPriorities 0 1)/' $CONF
+    sed -i 's/^AiPlayerbot\.DisableRandomLevels.*/AiPlayerbot.DisableRandomLevels = $(get_value DisableRandomLevels 0 1)/' $CONF
+    sed -i 's/^AiPlayerbot\.XPRate.*/AiPlayerbot.XPRate = $(get_value XPRate 1 4)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomGearMaxLevel.*/AiPlayerbot.RandomGearMaxLevel = $(get_value RandomGearMaxLevel 500 50)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomGearMaxDiff.*/AiPlayerbot.RandomGearMaxDiff = $(get_value RandomGearMaxDiff 9 20)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomGearUpgradeEnabled.*/AiPlayerbot.RandomGearUpgradeEnabled = $(get_value RandomGearUpgradeEnabled 0 1)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomBotMaps.*/AiPlayerbot.RandomBotMaps = $(get_value RandomBotMaps 0,1,530,571 0,1)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomBotTeleportTeleportMinInterval.*/AiPlayerbot.RandomBotTeleportTeleportMinInterval = $(get_value RandomBotTeleportMinInterval 7200 86400)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomBotRpgChance.*/AiPlayerbot.RandomBotRpgChance = $(get_value RandomBotRpgChance 0.20 0.5)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomBotGuildCount.*/AiPlayerbot.RandomBotGuildCount = $(get_value RandomBotGuildCount 20 0)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomBotArenaTeamCount.*/AiPlayerbot.RandomBotArenaTeamCount = $(get_value RandomBotArenaTeamCount 20 0)/' $CONF
+    sed -i 's/^AiPlayerbot\.DeleteRandomBotArenaTeams.*/AiPlayerbot.DeleteRandomBotArenaTeams = $(get_value DeleteRandomBotArenaTeams 0 1)/' $CONF
+    sed -i 's/^AiPlayerbot\.EnableGreet.*/AiPlayerbot.EnableGreet = $(get_value EnableGreet 1 0)/' $CONF
+    sed -i 's/^AiPlayerbot\.RandomBotAccountCount.*/AiPlayerbot.RandomBotAccountCount = $(get_value RandomBotAccountCount 200 500)/' $CONF
+  "
+
+  echo
+  echo "Done. Settings applied successfully."
+  echo
+  read -p "Start server now? (Y/N): " START
+  if [[ "$START" == "Y" ]]; then
+    pct exec "$GAME_CTID" -- systemctl start mangosd
+    echo "Server started."
+  fi
+  read -p "Press Enter to continue..."
+}
 core_menu() {
   while true; do
     #clear
@@ -1661,15 +1837,30 @@ database_menu() {
 
 install_db() {
   derive_db_names || return 1
-  echo "Installing full DB..."
+  echo "Installing full DB (including realm)..."
   install_world
   install_char
+  install_armory
   install_logs
   install_realm
   create_lan_db_user
   fix_realm_entry
   echo "DB install complete."
 }
+# Non-master expansions skip realm DB install
+install_db_no_realm() {
+  derive_db_names || return 1
+  echo "Installing expansion DB (world/chars/logs only)..."
+  install_world
+  install_char
+  install_armory
+  install_logs
+  # Grant LAN user access to new DBs - realm DB already exists from master
+  create_lan_db_user
+  fix_realm_entry
+  echo "DB install complete."
+}
+
 install_world() {
   derive_db_names || return 1
   echo "Installing world DB..."
@@ -1714,10 +1905,11 @@ write_version "${EXPANSION}_world_version.spp" \
 }
 install_realm() {
   derive_db_names || return 1
-  echo "Installing realm DB..."
 
-  GAME_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
-  REALM_NAME="SPP-${EXPANSION^}"
+  # Pin master on first realm install
+  pin_master_expansion
+
+  echo "Installing realm DB..."
 
   if pct exec "$DB_CTID" -- bash -c "
     set -euo pipefail
@@ -1727,7 +1919,6 @@ install_realm() {
     REALM_DB=\"${REALM_DB_NAME}\"
 
     mariadb -u root < \"\$BASE/drop_realmd.sql\"
-
     mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmd.sql\"
     mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmlist.sql\"
 
@@ -1740,15 +1931,15 @@ install_realm() {
         [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
       done
     done
-
   "; then
     echo "Realm DB installed successfully."
   else
     echo "Realm DB install FAILED."
     return 1
   fi
-  write_version "${EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
-    read -p "Press Enter to return..." _
+
+  write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
+  read -p "Press Enter to return..." _
 }
 install_char() {
   derive_db_names || return 1
@@ -1797,27 +1988,84 @@ install_char() {
 }
 install_logs() {
   derive_db_names || return 1
+  echo "Installing logs DB..."
 
-    echo "Installing world DB..."
- if pct exec "$DB_CTID" -- bash -c "
+  if pct exec "$DB_CTID" -- bash -c "
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
 
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-
-  BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-  LOG_DB=\"${LOG_DB_NAME}\"
-
-  mariadb -u root < \"\$BASE/drop_logs.sql\"
-  mariadb -u root \"\$LOG_DB\" < \"\$BASE/logs.sql\"
+    mariadb -u root < \"\$BASE/drop_logs.sql\"
+    mariadb -u root \"${LOG_DB_NAME}\" < \"\$BASE/logs.sql\"
   "; then
-    echo "DB installed successfully."
+    echo "Logs DB installed successfully."
   else
-    echo "DB install FAILED."
+    echo "Logs DB install FAILED."
     return 1
   fi
+
   write_version "${EXPANSION}_logs_version.spp" "${VERSION_MAP[$EXPANSION:LOGS]}"
-    read -p "Press Enter to return..." _
+  read -p "Press Enter to return..." _
 }
-  
+
+install_realm() {
+  derive_db_names || return 1
+  pin_master_expansion
+  echo "Installing realm DB..."
+
+  if pct exec "$DB_CTID" -- bash -c "
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+
+    mariadb -u root < \"\$BASE/drop_realmd.sql\"
+    mariadb -u root \"${REALM_DB_NAME}\" < \"\$BASE/realmd.sql\"
+    mariadb -u root \"${REALM_DB_NAME}\" < \"\$BASE/realmlist.sql\"
+
+    for f in \"\$BASE/realmd\"/*.sql; do
+      [ -f \"\$f\" ] && mariadb -u root \"${REALM_DB_NAME}\" < \"\$f\"
+    done
+
+    for dir in \$(ls -1 \"\$BASE/updates/realmd\" | sort -n); do
+      for f in \"\$BASE/updates/realmd/\$dir\"/*.sql; do
+        [ -f \"\$f\" ] && mariadb -u root \"${REALM_DB_NAME}\" < \"\$f\"
+      done
+    done
+  "; then
+    echo "Realm DB installed successfully."
+  else
+    echo "Realm DB install FAILED."
+    return 1
+  fi
+
+  write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
+  read -p "Press Enter to return..." _
+}
+
+install_armory() {
+  derive_db_names || return 1
+  echo "Installing ${EXPANSION}armory..."
+
+  if pct exec "$DB_CTID" -- bash -c "
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
+
+    if [ ! -f \"\$BASE/armory.7z\" ]; then
+      echo 'armory.7z not found.'
+      exit 1
+    fi
+
+    cd \"\$BASE\"
+    7z x -y armory.7z >/dev/null
+    mariadb -u root < armory.sql
+    rm -f armory.sql
+  "; then
+    echo "${EXPANSION} armory DB installed successfully."
+  else
+    echo "${EXPANSION} armory DB install FAILED."
+    return 1
+  fi
+}
+
+
 reset_characters() {
   derive_db_names || return 1
 
@@ -1975,45 +2223,83 @@ install_data() {
 }
 
 full_install() {
-
   derive_db_names || return 1
 
   echo "Stopping services..."
   pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
-  pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
-  pct exec "$WEB_CTID" -- systemctl stop apache2 2>/dev/null || true
+
+  if is_master; then
+    pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
+    pct exec "$WEB_CTID" -- systemctl stop apache2 2>/dev/null || true
+  fi
 
   echo "Removing old install directory..."
   pct exec "$GAME_CTID" -- rm -rf "$INSTALL_DIR"
-  pct exec "$LOGIN_CTID" -- rm -rf "$INSTALL_DIR"
-  pct exec "$WEB_CTID" -- rm -rf /var/www/html/*
+
+  if is_master; then
+    pct exec "$LOGIN_CTID" -- rm -rf "$INSTALL_DIR"
+    pct exec "$WEB_CTID" -- rm -rf /var/www/html/*
+  fi
 
   echo "Removing old build + source..."
   pct exec "$GAME_CTID" -- rm -rf /opt/source /opt/spp-settings
 
   echo "Removing version trackers..."
-  rm -f "${EXPANSION}_core_version.spp"
-  rm -f "${EXPANSION}_world_version.spp"
-  rm -f "${EXPANSION}_logs_version.spp"
-  rm -f "${EXPANSION}"_*_version.spp
+  pct exec "$DB_CTID" -- rm -f \
+    "/opt/${EXPANSION}_core_version.spp" \
+    "/opt/${EXPANSION}_world_version.spp" \
+    "/opt/${EXPANSION}_chars_version.spp" \
+    "/opt/${EXPANSION}_logs_version.spp" \
+    "/opt/${EXPANSION}_maps_version.spp"
 
-  echo "Dropping databases..."
+  if is_master; then
+    pct exec "$DB_CTID" -- rm -f \
+      "/opt/${EXPANSION}_realm_version.spp" \
+      "/opt/${EXPANSION}_website_version.spp"
+  fi
+
+  echo "Dropping expansion databases..."
   pct exec "$DB_CTID" -- bash -c "
-  export MYSQL_PWD='${DB_ROOT_PASS}'
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${WORLD_DB};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${CHAR_DB_NAME};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${REALM_DB_NAME};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${LOG_DB_NAME};\"
-  mariadb -u root -e \"DROP DATABASE IF EXISTS ${EXPANSION}armory;\"
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    mariadb -u root -e \"DROP DATABASE IF EXISTS ${WORLD_DB};\"
+    mariadb -u root -e \"DROP DATABASE IF EXISTS ${CHAR_DB_NAME};\"
+    mariadb -u root -e \"DROP DATABASE IF EXISTS ${LOG_DB_NAME};\"
+    mariadb -u root -e \"DROP DATABASE IF EXISTS ${EXPANSION}armory;\"
   "
 
+  # Only drop realm DB if we are the master (it's shared)
+  if is_master; then
+    pct exec "$DB_CTID" -- bash -c "
+      export MYSQL_PWD='${DB_ROOT_PASS}'
+      mariadb -u root -e \"DROP DATABASE IF EXISTS ${REALM_DB_NAME};\"
+    "
+    pin_master_expansion
+  fi
+
   comp_server
-  install_db
+
+  if is_master; then
+    install_db
+  else
+    install_db_no_realm
+  fi
+
   install_data
   service_create
-  install_website
+
+  if is_master; then
+    install_website
+  fi
+
+  fix_realm_entry
   fix_mariadb_bind
+  create_lan_db_user
+
+  echo
+  echo "Full install complete for $EXPANSION."
+  read -p "Press Enter to continue..."
 }
+
 sync_settings_repo() {
   pct exec "$GAME_CTID" -- bash -c "
     set -e
