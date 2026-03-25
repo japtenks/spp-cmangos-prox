@@ -542,7 +542,7 @@ print_banner() {
   / ___||  _ \|  _ \\
   \___ \| |_) | |_) |
    ___) |  __/|  __/
-  |____/|_|   |_|roxmox v.2
+  |____/|_|   |_|roxmox v.21
 "
       ;;
   esac
@@ -1091,6 +1091,7 @@ git sparse-checkout set Settings/${MAP_KEY}
 CONF_DIR=\"Settings/${MAP_KEY}\"
 cp -f \$CONF_DIR/*.conf $INSTALL_DIR/etc/
 "
+deploy_spp_configs
 }
 deploy_realmd() {
   deploy_spp_configs || return 1
@@ -1414,223 +1415,35 @@ maintenance_menu() {
     esac
   done
 }
+
 config_menu() {
   while true; do
     print_banner
     echo "Config Settings"
     echo
-    # Show current mode if we can detect it
-    echo "1 - Apply Stock Settings"
-    echo "2 - Apply Sagrids Settings"
-    echo "3 - Apply Custom Settings (prompted)"
+    echo "1 - Update Bot Conf from Repo"
     echo "0 - Back"
     echo
     read -p "Selection: " CSEL
     case "$CSEL" in
-      1) apply_config "stock" ;;
-      2) apply_config "sagrids" ;;
-      3) apply_config_prompted ;;
+      1)
+        case "$EXPANSION" in
+          classic) INSTALL_DIR="/srv/mangos-classic" ;;
+          tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+          wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+        esac
+        derive_db_names || return 1
+        check_and_update_botconf
+        read -p "Press Enter to continue..."
+        ;;
       0) return ;;
     esac
   done
 }
-apply_config() {
-  local MODE=$1
-  local CONF_DIR="/srv/mangos-${EXPANSION}/etc"
-  local CONF="$CONF_DIR/aiplayerbot.conf"
 
-  # Check server is stopped
-  if pct exec "$GAME_CTID" -- systemctl is-active mangosd &>/dev/null; then
-    echo "ERROR: Server is still running. Stop the server before changing settings."
-    read -p "Press Enter to continue..."
-    return
-  fi
-
-  # Confirm
-  echo
-  echo "Applying $MODE settings to aiplayerbot.conf"
-  read -p "Confirm? (YES): " CONFIRM
-  [[ "$CONFIRM" != "YES" ]] && return
-
-  # Backup - find next available backup number
-  local BKUP_NUM=1
-  while pct exec "$GAME_CTID" -- test -f "${CONF}.bkup${BKUP_NUM}"; do
-    ((BKUP_NUM++))
-  done
-  pct exec "$GAME_CTID" -- cp "$CONF" "${CONF}.bkup${BKUP_NUM}"
-  echo "Backup saved as aiplayerbot.conf.bkup${BKUP_NUM}"
-
-  if [[ "$MODE" == "stock" ]]; then
-    pct exec "$GAME_CTID" -- bash -c "
-      sed -i 's/^AiPlayerbot\.DisableBotOptimizations.*/AiPlayerbot.DisableBotOptimizations = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.DisableActivityPriorities.*/AiPlayerbot.DisableActivityPriorities = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.DisableRandomLevels.*/AiPlayerbot.DisableRandomLevels = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.XPRate.*/AiPlayerbot.XPRate = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomGearMaxLevel.*/AiPlayerbot.RandomGearMaxLevel = 500/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomGearMaxDiff.*/AiPlayerbot.RandomGearMaxDiff = 9/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomGearUpgradeEnabled.*/AiPlayerbot.RandomGearUpgradeEnabled = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotMaps.*/AiPlayerbot.RandomBotMaps = 0,1,530,571/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotTeleportTeleportMinInterval.*/AiPlayerbot.RandomBotTeleportTeleportMinInterval = 7200/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotRpgChance.*/AiPlayerbot.RandomBotRpgChance = 0.20/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotGuildCount.*/AiPlayerbot.RandomBotGuildCount = 20/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotArenaTeamCount.*/AiPlayerbot.RandomBotArenaTeamCount = 20/' $CONF
-      sed -i 's/^AiPlayerbot\.DeleteRandomBotArenaTeams.*/AiPlayerbot.DeleteRandomBotArenaTeams = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.EnableGreet.*/AiPlayerbot.EnableGreet = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotAccountCount.*/AiPlayerbot.RandomBotAccountCount = 200/' $CONF
-    "
-
-  elif [[ "$MODE" == "custom" ]]; then
-    pct exec "$GAME_CTID" -- bash -c "
-      sed -i 's/^AiPlayerbot\.DisableBotOptimizations.*/AiPlayerbot.DisableBotOptimizations = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.DisableActivityPriorities.*/AiPlayerbot.DisableActivityPriorities = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.DisableRandomLevels.*/AiPlayerbot.DisableRandomLevels = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.XPRate.*/AiPlayerbot.XPRate = 4/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomGearMaxLevel.*/AiPlayerbot.RandomGearMaxLevel = 50/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomGearMaxDiff.*/AiPlayerbot.RandomGearMaxDiff = 20/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomGearUpgradeEnabled.*/AiPlayerbot.RandomGearUpgradeEnabled = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotMaps.*/AiPlayerbot.RandomBotMaps = 0,1/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotTeleportTeleportMinInterval.*/AiPlayerbot.RandomBotTeleportTeleportMinInterval = 86400/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotRpgChance.*/AiPlayerbot.RandomBotRpgChance = 0.5/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotGuildCount.*/AiPlayerbot.RandomBotGuildCount = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotArenaTeamCount.*/AiPlayerbot.RandomBotArenaTeamCount = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.DeleteRandomBotArenaTeams.*/AiPlayerbot.DeleteRandomBotArenaTeams = 1/' $CONF
-      sed -i 's/^AiPlayerbot\.EnableGreet.*/AiPlayerbot.EnableGreet = 0/' $CONF
-      sed -i 's/^AiPlayerbot\.RandomBotAccountCount.*/AiPlayerbot.RandomBotAccountCount = 500/' $CONF
-    "
-  fi
-
-  echo "Done. Settings applied successfully."
-  echo
-  read -p "Start server now? (Y/N): " START
-  if [[ "$START" == "Y" ]]; then
-    pct exec "$GAME_CTID" -- systemctl start mangosd
-    echo "Server started."
-  fi
-  read -p "Press Enter to continue..."
-}
-
-apply_config_prompted() {
-  local CONF_DIR="/srv/mangos-${EXPANSION}/etc"
-  local CONF="$CONF_DIR/aiplayerbot.conf"
-
-  # Check server is stopped
-  if pct exec "$GAME_CTID" -- systemctl is-active mangosd &>/dev/null; then
-    echo "ERROR: Server is still running. Stop the server before changing settings."
-    read -p "Press Enter to continue..."
-    return
-  fi
-
-  echo
-  echo "Custom Config - Prompted"
-  echo "For each setting enter S (Stock) or C (Custom/Sagrids)"
-  echo
-  echo "Stock values shown first, Sagrids values shown second."
-  echo
-
-  # Collect all choices first
-  declare -A CHOICES
-
-  prompt_setting() {
-    local KEY=$1
-    local STOCK=$2
-    local CUSTOM=$3
-    local DESC=$4
-    while true; do
-      echo "  $DESC"
-      echo "    S = $STOCK"
-      echo "    C = $CUSTOM"
-      read -p "  Choice [S/C]: " CHOICE
-      CHOICE="${CHOICE^^}"
-      if [[ "$CHOICE" == "S" || "$CHOICE" == "C" ]]; then
-        CHOICES[$KEY]=$CHOICE
-        break
-      fi
-      echo "  Invalid input, enter S or C"
-    done
-    echo
-  }
-
-  prompt_setting "DisableBotOptimizations"          "0"         "1"      "DisableBotOptimizations    (0=off, 1=all bots always active)"
-  prompt_setting "DisableActivityPriorities"        "0"         "1"      "DisableActivityPriorities  (0=off, 1=ignore activity priorities)"
-  prompt_setting "DisableRandomLevels"              "0"         "1"      "DisableRandomLevels        (0=random levels, 1=bots level naturally)"
-  prompt_setting "XPRate"                           "1"         "4"      "XPRate                     (1=normal, 4=4x XP for bots)"
-  prompt_setting "RandomGearMaxLevel"               "500"       "50"     "RandomGearMaxLevel          (500=no cap, 50=progression cap)"
-  prompt_setting "RandomGearMaxDiff"                "9"         "20"     "RandomGearMaxDiff           (9=strict, 20=looser gear diff)"
-  prompt_setting "RandomGearUpgradeEnabled"         "0"         "1"      "RandomGearUpgradeEnabled    (0=off, 1=bots upgrade gear over time)"
-  prompt_setting "RandomBotMaps"                    "0,1,530,571" "0,1"  "RandomBotMaps               (all maps vs Classic only)"
-  prompt_setting "RandomBotTeleportMinInterval"     "7200"      "86400"  "TeleportMinInterval         (7200=2hrs, 86400=24hrs)"
-  prompt_setting "RandomBotRpgChance"               "0.20"      "0.5"    "RandomBotRpgChance          (0.20=less RPG, 0.5=more RPG)"
-  prompt_setting "RandomBotGuildCount"              "20"        "0"      "RandomBotGuildCount         (20=bot guilds, 0=none)"
-  prompt_setting "RandomBotArenaTeamCount"          "20"        "0"      "RandomBotArenaTeamCount     (20=arena teams, 0=none)"
-  prompt_setting "DeleteRandomBotArenaTeams"        "0"         "1"      "DeleteRandomBotArenaTeams   (0=keep, 1=delete)"
-  prompt_setting "EnableGreet"                      "1"         "0"      "EnableGreet                 (1=bots greet players, 0=silent)"
-  prompt_setting "RandomBotAccountCount"            "200"       "500"    "RandomBotAccountCount       (200=stock, 500=sagrids)"
-
-  # Summary
-  echo
-  echo "========================================"
-  echo " Summary of your choices:"
-  echo "========================================"
-  for KEY in "${!CHOICES[@]}"; do
-    echo "  $KEY = ${CHOICES[$KEY]}"
-  done
-  echo
-  read -p "Apply these settings? (YES): " CONFIRM
-  [[ "$CONFIRM" != "YES" ]] && return
-
-  # Backup
-  local BKUP_NUM=1
-  while pct exec "$GAME_CTID" -- test -f "${CONF}.bkup${BKUP_NUM}"; do
-    ((BKUP_NUM++))
-  done
-  pct exec "$GAME_CTID" -- cp "$CONF" "${CONF}.bkup${BKUP_NUM}"
-  echo "Backup saved as aiplayerbot.conf.bkup${BKUP_NUM}"
-
-  # Build sed values based on choices
-  get_value() {
-    local KEY=$1
-    local STOCK=$2
-    local CUSTOM=$3
-    if [[ "${CHOICES[$KEY]}" == "S" ]]; then
-      echo "$STOCK"
-    else
-      echo "$CUSTOM"
-    fi
-  }
-
-  pct exec "$GAME_CTID" -- bash -c "
-    sed -i 's/^AiPlayerbot\.DisableBotOptimizations.*/AiPlayerbot.DisableBotOptimizations = $(get_value DisableBotOptimizations 0 1)/' $CONF
-    sed -i 's/^AiPlayerbot\.DisableActivityPriorities.*/AiPlayerbot.DisableActivityPriorities = $(get_value DisableActivityPriorities 0 1)/' $CONF
-    sed -i 's/^AiPlayerbot\.DisableRandomLevels.*/AiPlayerbot.DisableRandomLevels = $(get_value DisableRandomLevels 0 1)/' $CONF
-    sed -i 's/^AiPlayerbot\.XPRate.*/AiPlayerbot.XPRate = $(get_value XPRate 1 4)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomGearMaxLevel.*/AiPlayerbot.RandomGearMaxLevel = $(get_value RandomGearMaxLevel 500 50)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomGearMaxDiff.*/AiPlayerbot.RandomGearMaxDiff = $(get_value RandomGearMaxDiff 9 20)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomGearUpgradeEnabled.*/AiPlayerbot.RandomGearUpgradeEnabled = $(get_value RandomGearUpgradeEnabled 0 1)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomBotMaps.*/AiPlayerbot.RandomBotMaps = $(get_value RandomBotMaps 0,1,530,571 0,1)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomBotTeleportTeleportMinInterval.*/AiPlayerbot.RandomBotTeleportTeleportMinInterval = $(get_value RandomBotTeleportMinInterval 7200 86400)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomBotRpgChance.*/AiPlayerbot.RandomBotRpgChance = $(get_value RandomBotRpgChance 0.20 0.5)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomBotGuildCount.*/AiPlayerbot.RandomBotGuildCount = $(get_value RandomBotGuildCount 20 0)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomBotArenaTeamCount.*/AiPlayerbot.RandomBotArenaTeamCount = $(get_value RandomBotArenaTeamCount 20 0)/' $CONF
-    sed -i 's/^AiPlayerbot\.DeleteRandomBotArenaTeams.*/AiPlayerbot.DeleteRandomBotArenaTeams = $(get_value DeleteRandomBotArenaTeams 0 1)/' $CONF
-    sed -i 's/^AiPlayerbot\.EnableGreet.*/AiPlayerbot.EnableGreet = $(get_value EnableGreet 1 0)/' $CONF
-    sed -i 's/^AiPlayerbot\.RandomBotAccountCount.*/AiPlayerbot.RandomBotAccountCount = $(get_value RandomBotAccountCount 200 500)/' $CONF
-  "
-
-  echo
-  echo "Done. Settings applied successfully."
-  echo
-  read -p "Start server now? (Y/N): " START
-  if [[ "$START" == "Y" ]]; then
-    pct exec "$GAME_CTID" -- systemctl start mangosd
-    echo "Server started."
-  fi
-  read -p "Press Enter to continue..."
-}
 core_menu() {
   while true; do
-    #clear
     print_banner
-
     echo
     echo "Core Maintenance"
     echo
@@ -1644,7 +1457,7 @@ core_menu() {
     case "$CORE" in
       1)
         read -p "Confirm rebuild? (Y/N): " CONFIRM
-        if [[ "$CONFIRM" == "Y" ]]; then
+        if [[ "${CONFIRM^^}" == "Y" ]]; then
           pct exec "$GAME_CTID" -- rm -rf /opt/source
           comp_server
         fi
@@ -1657,123 +1470,125 @@ core_menu() {
     esac
   done
 }
+
 comp_server() {
-  
-case "$EXPANSION" in
-  classic)
-    REPO="https://github.com/celguar/mangos-classic.git"
-    INSTALL_DIR="/srv/mangos-classic"
-    ;;
-  tbc)
-    REPO="https://github.com/celguar/mangos-tbc.git"
-    INSTALL_DIR="/srv/mangos-tbc"
-    ;;
-  wotlk)
-    REPO="https://github.com/celguar/mangos-wotlk.git"
-    INSTALL_DIR="/srv/mangos-wotlk"
-    ;;
-esac
 
-pct exec "$GAME_CTID" -- bash -c "
-set -e
+  case "$EXPANSION" in
+    classic) REPO="https://github.com/celguar/mangos-classic.git"; INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     REPO="https://github.com/celguar/mangos-tbc.git";     INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   REPO="https://github.com/celguar/mangos-wotlk.git";   INSTALL_DIR="/srv/mangos-wotlk" ;;
+  esac
 
-cd /opt
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd /opt
 
-if [[ -d source ]]; then
-  echo 'Updating existing core...'
-  cd source
-  git fetch
-  git checkout ike3-bots
-  git pull
+    if [[ -d source ]]; then
+      echo 'Updating existing core...'
+      cd source
+      git fetch
+      git checkout ike3-bots
+      git pull
+      cd src/modules/playerbot
+      git fetch
+      git checkout master
+      git pull
+    else
+      echo 'Cloning fresh core...'
+      git clone $REPO source
+      cd source
+      git checkout ike3-bots
+      sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
+      mkdir -p src/modules
+      cd src/modules
+      git clone https://github.com/cmangos/playerbots.git playerbot
+    fi
+  "
 
-cd src/modules/playerbot
-git fetch
-git checkout master
-git pull
-else
-  echo 'Cloning fresh core...'
-  git clone $REPO source
-  cd source
-  git checkout ike3-bots
-  sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
-  mkdir -p src/modules
-  cd src/modules
-  git clone https://github.com/cmangos/playerbots.git playerbot
-fi
-"
-pct exec "$GAME_CTID" -- bash -c "
-cd /opt/source &&
-mkdir -p build &&
-cd build &&
-cmake .. \
-  -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DBUILD_EXTRACTORS=OFF \
-  -DPCH=1 \
-  -DDEBUG=0 \
-  -DBUILD_PLAYERBOTS=ON \
-  -DBUILD_AHBOT=ON \
-  -DBUILD_MODULES=ON \
-  -DBUILD_GIT_ID=ON \
-  -DBUILD_MODULE_ACHIEVEMENTS=ON \
-  -DBUILD_MODULE_IMMERSIVE=ON \
-  -DBUILD_MODULE_HARDCORE=ON \
-  -DBUILD_MODULE_TRANSMOG=ON \
-  -DBUILD_MODULE_DUALSPEC=ON \
-  -DBUILD_MODULE_BOOST=ON \
-  -DBUILD_MODULE_CUSTOM20=ON \
-  -DBUILD_MODULE_BALANCING=ON \
-  -DBUILD_MODULE_BARBER=ON \
-  -DBUILD_MODULE_TRAININGDUMMIES=ON \
-  -DBUILD_MODULE_VOICEOVER=ON &&
-make -j\$(nproc) &&
-make install &&
-mkdir -p /var/log/mangos/
-"
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd /opt/source
+    mkdir -p build
+    cd build
+    cmake .. \
+      -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DBUILD_EXTRACTORS=OFF \
+      -DPCH=1 \
+      -DDEBUG=0 \
+      -DBUILD_PLAYERBOTS=ON \
+      -DBUILD_AHBOT=ON \
+      -DBUILD_MODULES=ON \
+      -DBUILD_GIT_ID=ON \
+      -DBUILD_MODULE_ACHIEVEMENTS=ON \
+      -DBUILD_MODULE_IMMERSIVE=ON \
+      -DBUILD_MODULE_HARDCORE=ON \
+      -DBUILD_MODULE_TRANSMOG=ON \
+      -DBUILD_MODULE_DUALSPEC=ON \
+      -DBUILD_MODULE_BOOST=ON \
+      -DBUILD_MODULE_CUSTOM20=ON \
+      -DBUILD_MODULE_BALANCING=ON \
+      -DBUILD_MODULE_BARBER=ON \
+      -DBUILD_MODULE_TRAININGDUMMIES=ON \
+      -DBUILD_MODULE_VOICEOVER=ON
+    make -j\$(nproc)
+    make install
+    mkdir -p /var/log/mangos/
+  "
 
-update_core_metadata
-
-#deploy_realmd
-update_db_conf
+  update_core_metadata
+  update_db_conf
+  check_and_update_botconf
 }
 
 update_core() {
 
-OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
-OLD_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
+  case "$EXPANSION" in
+    classic) INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+  esac
 
+  local OLD_CORE OLD_BOT
+  OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
+  OLD_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
 
-pct exec "$GAME_CTID" -- bash -c "
-set -e
-cd /opt/source
-git fetch
-git checkout ike3-bots
-git pull
-sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
-cd src/modules/playerbot
-git fetch
-git pull
-"
-
-NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
-NEW_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
-
-if [[ "$OLD_CORE" != "$NEW_CORE" || "$OLD_BOT" != "$NEW_BOT" ]]; then
-  # Stop server before installing
-  pct exec "$GAME_CTID" -- bash -c "systemctl stop mangos || true"
-  
   pct exec "$GAME_CTID" -- bash -c "
-  cd /opt/source/build
-  make -j\$(nproc)
-  make install
+    set -e
+    cd /opt/source
+    git fetch
+    git checkout ike3-bots
+    git pull
+    sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
+    cd src/modules/playerbot
+    git fetch
+    git pull
   "
-  
-  # Start server again after install
-  pct exec "$GAME_CTID" -- bash -c "systemctl start mangos || true"
-fi
 
-update_core_metadata
+  local NEW_CORE NEW_BOT
+  NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
+  NEW_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
+
+  if [[ "$OLD_CORE" != "$NEW_CORE" || "$OLD_BOT" != "$NEW_BOT" ]]; then
+    echo "Changes detected — rebuilding..."
+    pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
+
+    pct exec "$GAME_CTID" -- bash -c "
+      set -e
+      cd /opt/source/build
+      make -j\$(nproc)
+      make install
+    "
+
+    pct exec "$GAME_CTID" -- systemctl start mangosd 2>/dev/null || true
+  else
+    echo "No core or bot changes — skipping rebuild."
+  fi
+
+  update_core_metadata
+  check_and_update_botconf
 }
+
 update_core_metadata() {
 CORE_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --abbrev-ref HEAD)
 CORE_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --short HEAD)
@@ -1786,6 +1601,132 @@ EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]}"
 
 write_version "${EXPANSION}_core_version.spp" \
 "${EXPECTED_CORE}|${CORE_BRANCH}|${CORE_COMMIT}|${BOT_BRANCH}|${BOT_COMMIT}|${BUILD_DATE}"
+}
+
+check_and_update_botconf() {
+  # Requires: EXPANSION, MAP_KEY, GAME_CTID, INSTALL_DIR already set
+
+  local CONF_PATH="${INSTALL_DIR}/etc/aiplayerbot.conf"
+  local VERSION_FILE="/opt/${EXPANSION}_botconf_version.spp"
+  local CONF_REL="Settings/${MAP_KEY}/aiplayerbot.conf"
+
+  # Ensure the sparse-checkout repo exists and is current on the game container
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd /opt
+    if [ ! -d spp-settings ]; then
+      git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/japtenks/spp-cmangos-prox.git spp-settings
+      cd spp-settings
+      git sparse-checkout set Settings/${MAP_KEY}
+    else
+      cd spp-settings
+      git fetch --depth 1 origin
+      git reset --hard origin/HEAD
+    fi
+  "
+
+  # Get the current commit hash of the conf file in the repo
+  local REMOTE_HASH
+  REMOTE_HASH=$(pct exec "$GAME_CTID" -- bash -c "
+    git -C /opt/spp-settings log -1 --format='%H' -- '${CONF_REL}' 2>/dev/null || echo ''
+  ")
+
+  if [[ -z "$REMOTE_HASH" ]]; then
+    echo "WARNING: Could not determine aiplayerbot.conf commit hash. Skipping."
+    return 0
+  fi
+
+  # Read stored values: repo_hash | content_md5 | date
+  local STORED
+  STORED=$(pct exec "$GAME_CTID" -- bash -c "cat '${VERSION_FILE}' 2>/dev/null || echo ''")
+
+  local LOCAL_HASH DEPLOYED_CONTENT_HASH
+  IFS='|' read -r LOCAL_HASH DEPLOYED_CONTENT_HASH _ <<< "$STORED"
+
+  # Get the md5 of the live deployed file
+  local LIVE_CONTENT_HASH
+  LIVE_CONTENT_HASH=$(pct exec "$GAME_CTID" -- bash -c "
+    md5sum '${CONF_PATH}' 2>/dev/null | awk '{print \$1}' || echo ''
+  ")
+
+  local FILE_MODIFIED=0
+  local NEW_REPO_VERSION=0
+
+  [[ "$REMOTE_HASH" != "$LOCAL_HASH" ]]                        && NEW_REPO_VERSION=1
+  [[ -n "$LIVE_CONTENT_HASH" && \
+     -n "$DEPLOYED_CONTENT_HASH" && \
+     "$LIVE_CONTENT_HASH" != "$DEPLOYED_CONTENT_HASH" ]]       && FILE_MODIFIED=1
+
+  # Case 1: everything matches — nothing to do
+  if [[ $NEW_REPO_VERSION -eq 0 && $FILE_MODIFIED -eq 0 ]]; then
+    echo "aiplayerbot.conf is up to date (${REMOTE_HASH:0:8})."
+    return 0
+  fi
+
+  # Case 2: locally modified but no new repo version — warn and leave it alone
+  if [[ $FILE_MODIFIED -eq 1 && $NEW_REPO_VERSION -eq 0 ]]; then
+    echo "WARNING: aiplayerbot.conf has local modifications but no new repo version exists."
+    echo "         Leaving local file untouched."
+    return 0
+  fi
+
+  # Case 3: new repo version, file untouched — deploy silently
+  if [[ $NEW_REPO_VERSION -eq 1 && $FILE_MODIFIED -eq 0 ]]; then
+    echo "New aiplayerbot.conf version detected (${LOCAL_HASH:0:8} -> ${REMOTE_HASH:0:8}). Deploying..."
+    _deploy_botconf "$CONF_PATH" "$CONF_REL" "$VERSION_FILE" "$REMOTE_HASH"
+    return 0
+  fi
+
+  # Case 4: new repo version AND local modifications — prompt
+  if [[ $NEW_REPO_VERSION -eq 1 && $FILE_MODIFIED -eq 1 ]]; then
+    echo
+    echo "WARNING: aiplayerbot.conf has BOTH local modifications AND a new repo version."
+    echo "  Deployed version : ${LOCAL_HASH:0:8}"
+    echo "  New repo version : ${REMOTE_HASH:0:8}"
+    echo
+    read -p "Overwrite local changes with new repo version? (Y/N): " OW
+    if [[ "${OW^^}" == "Y" ]]; then
+      _deploy_botconf "$CONF_PATH" "$CONF_REL" "$VERSION_FILE" "$REMOTE_HASH"
+    else
+      echo "Skipping update. Local file preserved."
+    fi
+    return 0
+  fi
+}
+
+# Internal helper — backs up, copies, and records the new version
+_deploy_botconf() {
+  local CONF_PATH=$1
+  local CONF_REL=$2
+  local VERSION_FILE=$3
+  local REMOTE_HASH=$4
+
+  # Backup with next available number
+  local BKUP_NUM=1
+  while pct exec "$GAME_CTID" -- test -f "${CONF_PATH}.bkup${BKUP_NUM}" 2>/dev/null; do
+    ((BKUP_NUM++))
+  done
+
+  if pct exec "$GAME_CTID" -- test -f "$CONF_PATH" 2>/dev/null; then
+    pct exec "$GAME_CTID" -- cp "$CONF_PATH" "${CONF_PATH}.bkup${BKUP_NUM}"
+    echo "Backed up as aiplayerbot.conf.bkup${BKUP_NUM}"
+  fi
+
+  # Copy new conf from repo
+  pct exec "$GAME_CTID" -- cp "/opt/spp-settings/${CONF_REL}" "$CONF_PATH"
+
+  # Record repo hash + content hash of what we just deployed
+  local NEW_CONTENT_HASH
+  NEW_CONTENT_HASH=$(pct exec "$GAME_CTID" -- bash -c "
+    md5sum '${CONF_PATH}' | awk '{print \$1}'
+  ")
+
+  pct exec "$GAME_CTID" -- bash -c "
+    echo '${REMOTE_HASH}|${NEW_CONTENT_HASH}|$(date +%F_%H:%M)' > '${VERSION_FILE}'
+  "
+
+  echo "aiplayerbot.conf deployed (${REMOTE_HASH:0:8})."
 }
 
 database_menu() {
