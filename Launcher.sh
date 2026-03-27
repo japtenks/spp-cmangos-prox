@@ -1744,6 +1744,7 @@ database_menu() {
 	echo "4 - Update realmd DB"
 	echo "5 - Update characters DB"
 	echo "6 - Update PlayerBots DB"
+    echo "7 - Configure Bot Rotation Logging"
 	echo
     echo "0 - Back"
     echo
@@ -1771,6 +1772,10 @@ database_menu() {
 	  6)         
 	    read -p "Confirm update on PlayerBots? (Y/N): " CONFIRM
         [[ "$CONFIRM" == "Y" ]] && update_db_type playerbot ;;
+      7)
+        read -p "Configure bot rotation logging now? (Y/N): " CONFIRM
+        [[ "$CONFIRM" == "Y" ]] && configure_bot_rotation_log
+        ;;
       0) return ;;
     esac
   done
@@ -1948,6 +1953,443 @@ install_logs() {
   read -p "Press Enter to return..." _
 }
 
+get_bot_conf_value() {
+  local KEY=$1
+  pct exec "$GAME_CTID" -- bash -c "
+    awk -F= '/^[[:space:]]*${KEY}[[:space:]]*=/{v=\$2; sub(/#.*/, \"\", v); gsub(/[[:space:]]/, \"\", v); print v; exit}' '${INSTALL_DIR}/etc/aiplayerbot.conf'
+  " 2>/dev/null | tr -d '\r'
+}
+
+sync_bot_rotation_config() {
+  derive_db_names || return 1
+
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-${GAME_CTID:-}}"
+  [[ -z "${GAME_CTID:-}" ]] && echo "No game container found for ${EXPANSION}." && return 1
+
+  if ! pct exec "$GAME_CTID" -- test -f "${INSTALL_DIR}/etc/aiplayerbot.conf"; then
+    echo "aiplayerbot.conf not found for ${EXPANSION}."
+    return 1
+  fi
+
+  local ACCOUNT_PREFIX MIN_IN_WORLD MAX_IN_WORLD MIN_OFFLINE MAX_OFFLINE
+  local MIN_BOTS MAX_BOTS ACCOUNT_COUNT REBALANCE_MIN REBALANCE_MAX MAX_LOGINS
+  local AVG_IN_WORLD AVG_OFFLINE EXPECTED_ONLINE_PCT
+
+  ACCOUNT_PREFIX=$(get_bot_conf_value "AiPlayerbot.RandomBotAccountPrefix")
+  MIN_IN_WORLD=$(get_bot_conf_value "AiPlayerbot.MinRandomBotInWorldTime")
+  MAX_IN_WORLD=$(get_bot_conf_value "AiPlayerbot.MaxRandomBotInWorldTime")
+  MIN_OFFLINE=$(get_bot_conf_value "AiPlayerbot.MinRandomBotRandomizeTime")
+  MAX_OFFLINE=$(get_bot_conf_value "AiPlayerbot.MaxRandomRandomizeTime")
+  MIN_BOTS=$(get_bot_conf_value "AiPlayerbot.MinRandomBots")
+  MAX_BOTS=$(get_bot_conf_value "AiPlayerbot.MaxRandomBots")
+  ACCOUNT_COUNT=$(get_bot_conf_value "AiPlayerbot.RandomBotAccountCount")
+  REBALANCE_MIN=$(get_bot_conf_value "AiPlayerbot.RandomBotCountChangeMinInterval")
+  REBALANCE_MAX=$(get_bot_conf_value "AiPlayerbot.RandomBotCountChangeMaxInterval")
+  MAX_LOGINS=$(get_bot_conf_value "AiPlayerbot.RandomBotsMaxLoginsPerInterval")
+
+  ACCOUNT_PREFIX="${ACCOUNT_PREFIX:-RNDBOT}"
+  MIN_IN_WORLD="${MIN_IN_WORLD:-0}"
+  MAX_IN_WORLD="${MAX_IN_WORLD:-0}"
+  MIN_OFFLINE="${MIN_OFFLINE:-0}"
+  MAX_OFFLINE="${MAX_OFFLINE:-0}"
+  MIN_BOTS="${MIN_BOTS:-0}"
+  MAX_BOTS="${MAX_BOTS:-0}"
+  ACCOUNT_COUNT="${ACCOUNT_COUNT:-0}"
+  REBALANCE_MIN="${REBALANCE_MIN:-0}"
+  REBALANCE_MAX="${REBALANCE_MAX:-0}"
+  MAX_LOGINS="${MAX_LOGINS:-0}"
+
+  AVG_IN_WORLD=$(awk "BEGIN { printf \"%.1f\", (${MIN_IN_WORLD} + ${MAX_IN_WORLD}) / 2 }")
+  AVG_OFFLINE=$(awk "BEGIN { printf \"%.1f\", (${MIN_OFFLINE} + ${MAX_OFFLINE}) / 2 }")
+  EXPECTED_ONLINE_PCT=$(awk "BEGIN { total=${AVG_IN_WORLD}+${AVG_OFFLINE}; if (total <= 0) print \"0.0\"; else printf \"%.1f\", (${AVG_IN_WORLD}/total)*100 }")
+
+  pct exec "$DB_CTID" -- bash -c "
+    set -euo pipefail
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    mariadb -u root '${REALM_DB_NAME}' -e \"
+INSERT INTO bot_rotation_config
+  (realm, expansion, char_db, random_bot_account_prefix,
+   min_in_world_sec, max_in_world_sec, min_offline_sec, max_offline_sec,
+   avg_in_world_sec, avg_offline_sec, expected_online_pct,
+   min_random_bots, max_random_bots, account_count,
+   rebalance_min_sec, rebalance_max_sec, max_logins_per_interval, last_synced)
+VALUES
+  (${REALM_ID}, '${EXPANSION}', '${CHAR_DB_NAME}', '${ACCOUNT_PREFIX}',
+   ${MIN_IN_WORLD}, ${MAX_IN_WORLD}, ${MIN_OFFLINE}, ${MAX_OFFLINE},
+   ${AVG_IN_WORLD}, ${AVG_OFFLINE}, ${EXPECTED_ONLINE_PCT},
+   ${MIN_BOTS}, ${MAX_BOTS}, ${ACCOUNT_COUNT},
+   ${REBALANCE_MIN}, ${REBALANCE_MAX}, ${MAX_LOGINS}, NOW())
+ON DUPLICATE KEY UPDATE
+  expansion = VALUES(expansion),
+  char_db = VALUES(char_db),
+  random_bot_account_prefix = VALUES(random_bot_account_prefix),
+  min_in_world_sec = VALUES(min_in_world_sec),
+  max_in_world_sec = VALUES(max_in_world_sec),
+  min_offline_sec = VALUES(min_offline_sec),
+  max_offline_sec = VALUES(max_offline_sec),
+  avg_in_world_sec = VALUES(avg_in_world_sec),
+  avg_offline_sec = VALUES(avg_offline_sec),
+  expected_online_pct = VALUES(expected_online_pct),
+  min_random_bots = VALUES(min_random_bots),
+  max_random_bots = VALUES(max_random_bots),
+  account_count = VALUES(account_count),
+  rebalance_min_sec = VALUES(rebalance_min_sec),
+  rebalance_max_sec = VALUES(rebalance_max_sec),
+  max_logins_per_interval = VALUES(max_logins_per_interval),
+  last_synced = NOW();
+\"
+  "
+
+  echo "Bot rotation config synced for ${EXPANSION} (realm ${REALM_ID})."
+}
+
+configure_bot_rotation_log() {
+  derive_db_names || return 1
+
+  echo "Configuring bot rotation logging in ${REALM_DB_NAME} for realm ${REALM_ID}..."
+
+  if pct exec "$DB_CTID" -- bash -s <<__BOT_ROTATION_REMOTE__
+set -euo pipefail
+export MYSQL_PWD='${DB_ROOT_PASS}'
+
+if ! command -v cron >/dev/null 2>&1; then
+  apt update
+  DEBIAN_FRONTEND=noninteractive apt install -y cron
+fi
+
+mariadb -u root '${REALM_DB_NAME}' -e "
+CREATE TABLE IF NOT EXISTS bot_rotation_log (
+  id                           INT AUTO_INCREMENT PRIMARY KEY,
+  realm                        INT NOT NULL,
+  snapshot_time                DATETIME NOT NULL,
+  server_start_time            DATETIME NULL,
+  server_uptime_sec            BIGINT UNSIGNED,
+  server_total_uptime_sec      BIGINT UNSIGNED,
+  total_bots                   INT,
+  total_online                 INT,
+  rotating_active              INT,
+  online_idle                  INT,
+  cycled_off_progressed        INT,
+  never_progressed             INT,
+  pct_online_rotating          DECIMAL(5,1),
+  pct_ever_rotated             DECIMAL(5,1),
+  avg_level_rotating           DECIMAL(5,1),
+  highest_level                INT,
+  avg_equipped_ilvl_bots       DECIMAL(6,1),
+  avg_equipped_ilvl_server     DECIMAL(6,1),
+  cfg_min_in_world_sec         INT,
+  cfg_max_in_world_sec         INT,
+  cfg_avg_in_world_sec         DECIMAL(10,1),
+  cfg_min_offline_sec          INT,
+  cfg_max_offline_sec          INT,
+  cfg_avg_offline_sec          DECIMAL(10,1),
+  cfg_expected_online_pct      DECIMAL(5,1),
+  cfg_min_bots                 INT,
+  cfg_max_bots                 INT,
+  cfg_account_count            INT,
+  cfg_rebalance_min_sec        INT,
+  cfg_rebalance_max_sec        INT,
+  cfg_max_logins_per_interval  INT,
+  observed_avg_online_sec      DECIMAL(10,1),
+  observed_avg_offline_sec     DECIMAL(10,1),
+  observed_online_sessions     INT,
+  observed_offline_sessions    INT,
+  KEY idx_bot_rotation_log_realm_time (realm, snapshot_time)
+);
+
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS realm INT NOT NULL AFTER id;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS server_start_time DATETIME NULL AFTER snapshot_time;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS server_uptime_sec BIGINT UNSIGNED AFTER server_start_time;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS server_total_uptime_sec BIGINT UNSIGNED AFTER server_uptime_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS online_idle INT AFTER rotating_active;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cycled_off_progressed INT AFTER online_idle;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS never_progressed INT AFTER cycled_off_progressed;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS avg_equipped_ilvl_bots DECIMAL(6,1) AFTER highest_level;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS avg_equipped_ilvl_server DECIMAL(6,1) AFTER avg_equipped_ilvl_bots;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_min_in_world_sec INT AFTER avg_equipped_ilvl_server;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_max_in_world_sec INT AFTER cfg_min_in_world_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_avg_in_world_sec DECIMAL(10,1) AFTER cfg_max_in_world_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_min_offline_sec INT AFTER cfg_avg_in_world_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_max_offline_sec INT AFTER cfg_min_offline_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_avg_offline_sec DECIMAL(10,1) AFTER cfg_max_offline_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_expected_online_pct DECIMAL(5,1) AFTER cfg_avg_offline_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_min_bots INT AFTER cfg_expected_online_pct;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_max_bots INT AFTER cfg_min_bots;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_account_count INT AFTER cfg_max_bots;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_rebalance_min_sec INT AFTER cfg_account_count;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_rebalance_max_sec INT AFTER cfg_rebalance_min_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS cfg_max_logins_per_interval INT AFTER cfg_rebalance_max_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS observed_avg_online_sec DECIMAL(10,1) AFTER cfg_max_logins_per_interval;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS observed_avg_offline_sec DECIMAL(10,1) AFTER observed_avg_online_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS observed_online_sessions INT AFTER observed_avg_offline_sec;
+ALTER TABLE bot_rotation_log ADD COLUMN IF NOT EXISTS observed_offline_sessions INT AFTER observed_online_sessions;
+
+CREATE TABLE IF NOT EXISTS bot_rotation_config (
+  realm                     INT PRIMARY KEY,
+  expansion                 VARCHAR(16) NOT NULL,
+  char_db                   VARCHAR(64) NOT NULL,
+  random_bot_account_prefix VARCHAR(32) NOT NULL DEFAULT 'RNDBOT',
+  min_in_world_sec          INT,
+  max_in_world_sec          INT,
+  min_offline_sec           INT,
+  max_offline_sec           INT,
+  avg_in_world_sec          DECIMAL(10,1),
+  avg_offline_sec           DECIMAL(10,1),
+  expected_online_pct       DECIMAL(5,1),
+  min_random_bots           INT,
+  max_random_bots           INT,
+  account_count             INT,
+  rebalance_min_sec         INT,
+  rebalance_max_sec         INT,
+  max_logins_per_interval   INT,
+  last_synced               DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bot_rotation_state (
+  realm              INT NOT NULL,
+  bot_guid           INT UNSIGNED NOT NULL,
+  account_id         INT UNSIGNED NOT NULL,
+  bot_name           VARCHAR(32) NOT NULL DEFAULT '',
+  char_db            VARCHAR(64) NOT NULL,
+  last_online        TINYINT(1) NOT NULL DEFAULT 0,
+  last_change_time   DATETIME NOT NULL,
+  last_seen_time     DATETIME NOT NULL,
+  last_online_start  DATETIME NULL,
+  last_offline_start DATETIME NULL,
+  online_seconds     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  offline_seconds    BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  online_sessions    INT UNSIGNED NOT NULL DEFAULT 0,
+  offline_sessions   INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (realm, bot_guid),
+  KEY idx_bot_rotation_state_realm (realm)
+);
+"
+
+cat > /usr/local/bin/spp-bot-rotation-log.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+export MYSQL_PWD='${DB_ROOT_PASS}'
+
+REALM_DB='${REALM_DB_NAME}'
+
+db_exists() {
+  mariadb -u root -Nse "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='\$1'" | grep -qx "\$1"
+}
+
+mariadb -u root "\$REALM_DB" -Nse "
+  SELECT realm,
+         char_db,
+         random_bot_account_prefix,
+         COALESCE(min_in_world_sec, 0),
+         COALESCE(max_in_world_sec, 0),
+         COALESCE(min_offline_sec, 0),
+         COALESCE(max_offline_sec, 0),
+         COALESCE(min_random_bots, 0),
+         COALESCE(max_random_bots, 0),
+         COALESCE(account_count, 0),
+         COALESCE(rebalance_min_sec, 0),
+         COALESCE(rebalance_max_sec, 0),
+         COALESCE(max_logins_per_interval, 0)
+  FROM bot_rotation_config
+  ORDER BY realm
+" | while IFS=$'\t' read -r realm char_db prefix min_in max_in min_off max_off min_bots max_bots account_count rebalance_min rebalance_max max_logins; do
+  [[ -z "\${realm}" || -z "\${char_db}" ]] && continue
+  db_exists "\${char_db}" || continue
+  world_db="\${char_db%characters}mangos"
+  db_exists "\${world_db}" || continue
+
+  avg_in=\$(awk "BEGIN { printf \"%.1f\", (\${min_in} + \${max_in}) / 2 }")
+  avg_off=\$(awk "BEGIN { printf \"%.1f\", (\${min_off} + \${max_off}) / 2 }")
+  expected_pct=\$(awk "BEGIN { total=\${avg_in}+\${avg_off}; if (total <= 0) print \"0.0\"; else printf \"%.1f\", (\${avg_in}/total)*100 }")
+
+  mariadb -u root "\${char_db}" -e "
+    INSERT IGNORE INTO \${REALM_DB}.bot_rotation_state
+      (realm, bot_guid, account_id, bot_name, char_db, last_online, last_change_time, last_seen_time, last_online_start, last_offline_start)
+    SELECT
+      \${realm},
+      c.guid,
+      c.account,
+      c.name,
+      '\${char_db}',
+      c.online,
+      NOW(),
+      NOW(),
+      CASE WHEN c.online = 1 THEN NOW() ELSE NULL END,
+      CASE WHEN c.online = 0 THEN NOW() ELSE NULL END
+    FROM \${char_db}.characters c
+    WHERE c.account IN (
+      SELECT id FROM \${REALM_DB}.account WHERE username LIKE '\${prefix}%'
+    );
+
+    UPDATE \${REALM_DB}.bot_rotation_state s
+    JOIN (
+      SELECT c.guid, c.account, c.name, c.online
+      FROM \${char_db}.characters c
+      WHERE c.account IN (
+        SELECT id FROM \${REALM_DB}.account WHERE username LIKE '\${prefix}%'
+      )
+    ) cur ON s.realm = \${realm} AND s.bot_guid = cur.guid
+    SET
+      s.account_id = cur.account,
+      s.bot_name = cur.name,
+      s.char_db = '\${char_db}',
+      s.online_seconds = s.online_seconds + CASE
+        WHEN s.last_online = 1 AND cur.online = 0 THEN TIMESTAMPDIFF(SECOND, s.last_change_time, NOW())
+        ELSE 0
+      END,
+      s.offline_seconds = s.offline_seconds + CASE
+        WHEN s.last_online = 0 AND cur.online = 1 THEN TIMESTAMPDIFF(SECOND, s.last_change_time, NOW())
+        ELSE 0
+      END,
+      s.online_sessions = s.online_sessions + CASE
+        WHEN s.last_online = 1 AND cur.online = 0 THEN 1
+        ELSE 0
+      END,
+      s.offline_sessions = s.offline_sessions + CASE
+        WHEN s.last_online = 0 AND cur.online = 1 THEN 1
+        ELSE 0
+      END,
+      s.last_online_start = CASE
+        WHEN s.last_online = 0 AND cur.online = 1 THEN NOW()
+        ELSE s.last_online_start
+      END,
+      s.last_offline_start = CASE
+        WHEN s.last_online = 1 AND cur.online = 0 THEN NOW()
+        ELSE s.last_offline_start
+      END,
+      s.last_change_time = CASE
+        WHEN s.last_online <> cur.online THEN NOW()
+        ELSE s.last_change_time
+      END,
+      s.last_online = cur.online,
+      s.last_seen_time = NOW();
+
+    INSERT INTO \${REALM_DB}.bot_rotation_log
+      (realm, snapshot_time, server_start_time, server_uptime_sec, server_total_uptime_sec,
+       total_bots, total_online, rotating_active, online_idle,
+       cycled_off_progressed, never_progressed, pct_online_rotating, pct_ever_rotated,
+       avg_level_rotating, highest_level, avg_equipped_ilvl_bots, avg_equipped_ilvl_server,
+       cfg_min_in_world_sec, cfg_max_in_world_sec, cfg_avg_in_world_sec,
+       cfg_min_offline_sec, cfg_max_offline_sec, cfg_avg_offline_sec,
+       cfg_expected_online_pct, cfg_min_bots, cfg_max_bots, cfg_account_count,
+       cfg_rebalance_min_sec, cfg_rebalance_max_sec, cfg_max_logins_per_interval,
+       observed_avg_online_sec, observed_avg_offline_sec,
+       observed_online_sessions, observed_offline_sessions)
+    SELECT
+      \${realm},
+      NOW(),
+      FROM_UNIXTIME(uptime_info.starttime),
+      uptime_info.current_uptime_sec,
+      uptime_info.total_uptime_sec,
+      COUNT(*),
+      COALESCE(SUM(c.online = 1), 0),
+      COALESCE(SUM(c.online = 1 AND c.xp > 0), 0),
+      COALESCE(SUM(c.online = 1 AND c.xp = 0), 0),
+      COALESCE(SUM(c.online = 0 AND c.xp > 0), 0),
+      COALESCE(SUM(c.online = 0 AND c.xp = 0), 0),
+      ROUND(COALESCE(SUM(c.online = 1 AND c.xp > 0) / NULLIF(SUM(c.online = 1), 0) * 100, 0), 1),
+      ROUND(COALESCE(SUM(c.xp > 0) / NULLIF(COUNT(*), 0) * 100, 0), 1),
+      ROUND(AVG(CASE WHEN c.xp > 0 THEN c.level END), 1),
+      MAX(CASE WHEN c.xp > 0 THEN c.level END),
+      bot_ilvl.avg_equipped_ilvl_bots,
+      realm_ilvl.avg_equipped_ilvl_server,
+      \${min_in},
+      \${max_in},
+      \${avg_in},
+      \${min_off},
+      \${max_off},
+      \${avg_off},
+      \${expected_pct},
+      \${min_bots},
+      \${max_bots},
+      \${account_count},
+      \${rebalance_min},
+      \${rebalance_max},
+      \${max_logins},
+      obs.avg_online_sec,
+      obs.avg_offline_sec,
+      obs.total_online_sessions,
+      obs.total_offline_sessions
+    FROM \${char_db}.characters c
+    CROSS JOIN (
+      SELECT
+        ROUND(SUM(online_seconds) / NULLIF(SUM(online_sessions), 0), 1) AS avg_online_sec,
+        ROUND(SUM(offline_seconds) / NULLIF(SUM(offline_sessions), 0), 1) AS avg_offline_sec,
+        COALESCE(SUM(online_sessions), 0) AS total_online_sessions,
+        COALESCE(SUM(offline_sessions), 0) AS total_offline_sessions
+      FROM \${REALM_DB}.bot_rotation_state
+      WHERE realm = \${realm}
+    ) obs
+    CROSS JOIN (
+      SELECT ROUND(AVG(per_bot.avg_ilvl), 1) AS avg_equipped_ilvl_bots
+      FROM (
+        SELECT ci.guid, AVG(it.ItemLevel) AS avg_ilvl
+        FROM \${char_db}.character_inventory ci
+        JOIN \${world_db}.item_template it ON it.entry = ci.item_template
+        WHERE ci.bag = 0
+          AND ci.slot IN (0,1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17)
+          AND ci.guid IN (
+            SELECT guid
+            FROM \${char_db}.characters
+            WHERE account IN (
+              SELECT id FROM \${REALM_DB}.account WHERE username LIKE '\${prefix}%'
+            )
+          )
+        GROUP BY ci.guid
+      ) per_bot
+    ) bot_ilvl
+    CROSS JOIN (
+      SELECT ROUND(AVG(per_char.avg_ilvl), 1) AS avg_equipped_ilvl_server
+      FROM (
+        SELECT ci.guid, AVG(it.ItemLevel) AS avg_ilvl
+        FROM \${char_db}.character_inventory ci
+        JOIN \${world_db}.item_template it ON it.entry = ci.item_template
+        WHERE ci.bag = 0
+          AND ci.slot IN (0,1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17)
+        GROUP BY ci.guid
+      ) per_char
+    ) realm_ilvl
+    CROSS JOIN (
+      SELECT
+        COALESCE(MAX(CASE WHEN u.starttime = latest.max_starttime THEN u.starttime END), 0) AS starttime,
+        COALESCE(MAX(CASE WHEN u.starttime = latest.max_starttime THEN u.uptime END), 0) AS current_uptime_sec,
+        COALESCE(SUM(u.uptime), 0) AS total_uptime_sec
+      FROM \${REALM_DB}.uptime u
+      CROSS JOIN (
+        SELECT COALESCE(MAX(starttime), 0) AS max_starttime
+        FROM \${REALM_DB}.uptime
+        WHERE realmid = \${realm}
+      ) latest
+      WHERE u.realmid = \${realm}
+    ) uptime_info
+    WHERE c.account IN (
+      SELECT id FROM \${REALM_DB}.account WHERE username LIKE '\${prefix}%'
+    );
+  "
+done
+EOF
+
+chmod 755 /usr/local/bin/spp-bot-rotation-log.sh
+
+cat > /etc/cron.d/spp-bot-rotation-log <<'EOF'
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/30 * * * * root /usr/local/bin/spp-bot-rotation-log.sh >/var/log/spp-bot-rotation-log.log 2>&1
+EOF
+
+chmod 644 /etc/cron.d/spp-bot-rotation-log
+systemctl enable cron
+systemctl restart cron
+__BOT_ROTATION_REMOTE__
+  then
+    sync_bot_rotation_config || return 1
+    echo "Bot rotation logging configured."
+  else
+    echo "Bot rotation logging setup FAILED."
+    return 1
+  fi
+}
+
 install_realm() {
   derive_db_names || return 1
   pin_master_expansion
@@ -1976,6 +2418,8 @@ install_realm() {
     echo "Realm DB install FAILED."
     return 1
   fi
+
+  configure_bot_rotation_log || return 1
 
   write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
   read -p "Press Enter to return..." _
@@ -2362,6 +2806,7 @@ pct exec "$DB_CTID" -- systemctl start mariadb
 pct exec "$LOGIN_CTID" -- systemctl start realmd
 pct exec "$WEB_CTID" -- systemctl start apache2
 pct exec "$GAME_CTID" -- systemctl start mangosd
+sync_bot_rotation_config || true
 
 }
 
@@ -2412,6 +2857,10 @@ edit_world_settings() {
 }
 edit_bot_settings() {
   pct exec "$GAME_CTID" -- nano /srv/mangos-$EXPANSION/etc/aiplayerbot.conf
+  echo
+  echo "Syncing bot rotation config..."
+  sync_bot_rotation_config
+  read -p "Press Enter..." _
 }
 edit_realmd_settings() {
   pct exec "$LOGIN_CTID" -- nano /srv/mangos-$EXPANSION/etc/realmd.conf
