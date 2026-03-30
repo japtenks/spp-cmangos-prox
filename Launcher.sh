@@ -345,7 +345,8 @@ EOF
         git build-essential cmake \
         libssl-dev libbz2-dev libreadline-dev \
         libncurses-dev libmariadb-dev libmariadb-dev-compat \
-        libboost-all-dev libace-dev unzip wget p7zip-full
+        libboost-all-dev libace-dev unzip wget p7zip-full \
+        gdb
       ;;
     login)
       pct exec "$CTID" -- apt install -y libmariadb3 libssl3
@@ -1008,6 +1009,7 @@ WorkingDirectory=$INSTALL_DIR/bin
 ExecStart=$INSTALL_DIR/bin/mangosd -c $INSTALL_DIR/etc/mangosd.conf
 Restart=always
 RestartSec=10
+LimitCORE=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -1142,6 +1144,7 @@ shared_website_menu() {
   echo "1 - Install Website"
   echo "2 - Update Website"
   echo "3 - Align php for website db"
+  echo "4 - Update config-protected.php"
   echo
   echo "0 - Back"
 
@@ -1151,7 +1154,27 @@ shared_website_menu() {
     1) install_website ;;
     2) update_website ;;
 	3) web_config ;;
+    4) update_config_protected ;;
   esac
+}
+
+update_config_protected() {
+  echo "Pulling latest config-protected.php from repo..."
+
+  pct exec "$WEB_CTID" -- bash -c "
+    set -e
+    if [ ! -d /opt/SPP-Armory-Website ]; then
+      git clone https://github.com/japtenks/SPP-Armory-Website /opt/SPP-Armory-Website
+    fi
+    cd /opt/SPP-Armory-Website
+    git fetch --depth 1 origin
+    git reset --hard origin/HEAD
+    cp -f config/config-protected.php /var/www/html/config/config-protected.php
+    chown www-data:www-data /var/www/html/config/config-protected.php
+  "
+
+  echo "Reapplying DB credentials..."
+  web_config
 }
 install_website() {
   derive_db_names || return 1
@@ -2163,6 +2186,22 @@ CREATE TABLE IF NOT EXISTS bot_rotation_state (
   PRIMARY KEY (realm, bot_guid),
   KEY idx_bot_rotation_state_realm (realm)
 );
+
+CREATE TABLE IF NOT EXISTS bot_rotation_ilvl_log (
+  id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  realm               INT NOT NULL,
+  snapshot_time       DATETIME NOT NULL,
+  bot_guid            INT UNSIGNED NOT NULL,
+  bot_name            VARCHAR(32) NOT NULL DEFAULT '',
+  account_id          INT UNSIGNED NOT NULL,
+  char_db             VARCHAR(64) NOT NULL,
+  level               TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  online              TINYINT(1) NOT NULL DEFAULT 0,
+  avg_equipped_ilvl   DECIMAL(6,1) NULL,
+  equipped_item_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  KEY idx_bot_rotation_ilvl_log_realm_time (realm, snapshot_time),
+  KEY idx_bot_rotation_ilvl_log_bot_time (realm, bot_guid, snapshot_time)
+);
 "
 
 cat > /usr/local/bin/spp-bot-rotation-log.sh <<'EOF'
@@ -2263,6 +2302,35 @@ mariadb -u root "\$REALM_DB" -Nse "
       END,
       s.last_online = cur.online,
       s.last_seen_time = NOW();
+
+    INSERT INTO \${REALM_DB}.bot_rotation_ilvl_log
+      (realm, snapshot_time, bot_guid, bot_name, account_id, char_db, level, online, avg_equipped_ilvl, equipped_item_count)
+    SELECT
+      \${realm},
+      NOW(),
+      c.guid,
+      c.name,
+      c.account,
+      '\${char_db}',
+      c.level,
+      c.online,
+      bot_gear.avg_ilvl,
+      COALESCE(bot_gear.item_count, 0)
+    FROM \${char_db}.characters c
+    LEFT JOIN (
+      SELECT
+        ci.guid,
+        ROUND(AVG(it.ItemLevel), 1) AS avg_ilvl,
+        COUNT(*) AS item_count
+      FROM \${char_db}.character_inventory ci
+      JOIN \${world_db}.item_template it ON it.entry = ci.item_template
+      WHERE ci.bag = 0
+        AND ci.slot IN (0,1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17)
+      GROUP BY ci.guid
+    ) bot_gear ON bot_gear.guid = c.guid
+    WHERE c.account IN (
+      SELECT id FROM \${REALM_DB}.account WHERE username LIKE '\${prefix}%'
+    );
 
     INSERT INTO \${REALM_DB}.bot_rotation_log
       (realm, snapshot_time, server_start_time, server_uptime_sec, server_total_uptime_sec,
@@ -2834,6 +2902,7 @@ server_info_menu() {
     echo "5 - Change Realm Name"
 
     echo "7 - Crash Logs"
+    echo "8 - Analyze Crash (GDB)"
     echo
     echo "0 - Back"
     echo
@@ -2846,8 +2915,9 @@ server_info_menu() {
 	  3) edit_realmd_settings ;;
       4) change_server_address ;;
       5) change_realm_name ;;
-     
+
       7) view_crash_logs ;;
+      8) analyze_crash ;;
       0) return ;;
     esac
   done
@@ -2892,10 +2962,71 @@ change_realm_name() {
   read -p "Press Enter..."
 }
 view_crash_logs() {
+  derive_db_names || return 1
+  local BIN_DIR="$INSTALL_DIR/bin"
+
+  echo "=== Core files in $BIN_DIR ==="
   pct exec "$GAME_CTID" -- bash -c "
-    ls -lh /srv/mangos-$EXPANSION | grep core || echo 'No crash logs.'
+    ls -lht '$BIN_DIR'/core* 2>/dev/null || echo 'None found.'
   "
+
+  echo
+  echo "=== systemd-coredump entries ==="
+  pct exec "$GAME_CTID" -- bash -c "
+    coredumpctl list mangosd 2>/dev/null || echo '(systemd-coredump not available)'
+  "
+
   read -p "Press Enter..."
+}
+
+analyze_crash() {
+  derive_db_names || return 1
+  local BIN_DIR="$INSTALL_DIR/bin"
+  local BINARY="$BIN_DIR/mangosd"
+
+  # Prefer file-based cores (written to WorkingDirectory by LimitCORE=infinity)
+  local CORES
+  CORES=$(pct exec "$GAME_CTID" -- bash -c "
+    ls -t '$BIN_DIR'/core* 2>/dev/null || true
+  ")
+
+  # Fall back to systemd-coredump
+  local COREDUMP_LIST
+  COREDUMP_LIST=$(pct exec "$GAME_CTID" -- bash -c "
+    coredumpctl list mangosd 2>/dev/null || true
+  ")
+
+  if [[ -z "$CORES" && -z "$COREDUMP_LIST" ]]; then
+    echo "No core dumps found."
+    echo "Ensure 'Autostart services creation' has been run to apply LimitCORE=infinity."
+    echo "Core files will appear in: $BIN_DIR/core.<pid>"
+    read -p "Press Enter..."
+    return
+  fi
+
+  if [[ -n "$CORES" ]]; then
+    echo "Available core dumps:"
+    pct exec "$GAME_CTID" -- bash -c "ls -lht '$BIN_DIR'/core* 2>/dev/null"
+    echo
+    local LATEST
+    LATEST=$(echo "$CORES" | head -1)
+    read -p "Core file to load [$LATEST]: " CORE_FILE
+    CORE_FILE="${CORE_FILE:-$LATEST}"
+    echo
+    echo "Opening GDB. Useful commands:"
+    echo "  bt full                 — full backtrace of current thread"
+    echo "  thread apply all bt     — backtrace for all threads"
+    echo "  info registers          — CPU register state"
+    echo "  quit                    — exit GDB"
+    echo
+    pct exec "$GAME_CTID" -- gdb "$BINARY" "$CORE_FILE"
+  else
+    echo "systemd-coredump entries for mangosd:"
+    echo "$COREDUMP_LIST"
+    echo
+    echo "Opening most recent mangosd core via coredumpctl..."
+    pct exec "$GAME_CTID" -- coredumpctl gdb mangosd
+  fi
 }
 
 
