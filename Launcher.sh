@@ -921,29 +921,29 @@ shared_config_menu() {
 	6) fix_mariadb_bind ;;
   esac
 }
+
 update_db_conf() {
   derive_db_names || return 1
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
-# auto-pick first installed expansion as master
-if [[ -z "${MASTER_EXPANSION:-}" ]]; then
-  for EXP in classic tbc wotlk; do
-    if [[ -n "${GAME_CTIDS[$EXP]:-}" ]]; then
-      MASTER_EXPANSION="$EXP"
-      break
-    fi
-  done
-fi
+  # auto-pick first installed expansion as master
+  if [[ -z "${MASTER_EXPANSION:-}" ]]; then
+    for EXP in classic tbc wotlk; do
+      if [[ -n "${GAME_CTIDS[$EXP]:-}" ]]; then
+        MASTER_EXPANSION="$EXP"
+        break
+      fi
+    done
+  fi
 
-# fallback if nothing found
-: ${MASTER_EXPANSION:="$EXPANSION"}
+  : ${MASTER_EXPANSION:="$EXPANSION"}
 
-case "$MASTER_EXPANSION" in
-  classic) MASTER_INSTALL_DIR="/srv/mangos-classic" ;;
-  tbc)     MASTER_INSTALL_DIR="/srv/mangos-tbc" ;;
-  wotlk)   MASTER_INSTALL_DIR="/srv/mangos-wotlk" ;;
-esac
+  case "$MASTER_EXPANSION" in
+    classic) MASTER_INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     MASTER_INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   MASTER_INSTALL_DIR="/srv/mangos-wotlk" ;;
+  esac
 
   if pct exec "$LOGIN_CTID" -- test -f "${MASTER_INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
     pct exec "$LOGIN_CTID" -- bash -c "
@@ -960,6 +960,7 @@ esac
     deploy_realmd || return 1
     EXPANSION="$SAVED_EXP"
     derive_db_names || return 1
+
     pct exec "$LOGIN_CTID" -- bash -c "
       sed -i \
       's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
@@ -968,11 +969,18 @@ esac
     echo "realmd.conf updated."
   fi
 
-  # mangosd.conf — loop all installed expansions
-  for EXP in "${!GAME_CTIDS[@]}"; do
+  # mangosd.conf — only valid installs
+  for EXP in classic tbc wotlk; do
+    [[ -z "${GAME_CTIDS[$EXP]:-}" ]] && continue
+
     GAME_CTID="${GAME_CTIDS[$EXP]}"
     EXPANSION="$EXP"
     derive_db_names || continue
+
+    pct exec "$GAME_CTID" -- test -f "${INSTALL_DIR}/etc/mangosd.conf" 2>/dev/null || {
+      echo "$EXP mangosd.conf missing — skipping"
+      continue
+    }
 
     pct exec "$GAME_CTID" -- bash -c "
       sed -i \
@@ -982,9 +990,11 @@ esac
       -e 's|^LogsDatabaseInfo *=.*|LogsDatabaseInfo      = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
       ${INSTALL_DIR}/etc/mangosd.conf
     "
-    echo "${EXP} mangosd.conf updated."
+
+    echo "$EXP mangosd.conf updated."
   done
 }
+
 service_create() {
   if [[ -z "${EXPANSION:-}" ]]; then
     echo "Select expansion:"
