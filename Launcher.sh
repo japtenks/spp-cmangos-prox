@@ -1586,22 +1586,21 @@ comp_server() {
       git clone https://github.com/cmangos/playerbots.git playerbot
     fi
 
-    # Ensure spp-settings has patches/playerbots checked out and apply SPP patches
-    if [ ! -d /opt/spp-settings ]; then
-      git clone --depth 1 --filter=blob:none --sparse \
-        https://github.com/japtenks/spp-cmangos-prox.git /opt/spp-settings
-      cd /opt/spp-settings
-      git sparse-checkout set patches/playerbots
+    # Apply SPP patches via sed (content-match, resilient to upstream context shifts)
+    PLAIAI='/opt/source/src/modules/playerbot/playerbot/PlayerbotAI.cpp'
+    DROPQ='/opt/source/src/modules/playerbot/playerbot/strategy/actions/DropQuestAction.cpp'
+    if grep -q 'autoLoad && HasPlayerRelation()' \"\$PLAIAI\"; then
+      sed -i 's|if (autoLoad && HasPlayerRelation()) sPlayerbotDbStore.Load(this);|if (autoLoad) sPlayerbotDbStore.Load(this); // spp: guild flavor override|' \"\$PLAIAI\"
+      echo 'Applied: PlayerbotAI.cpp guild flavor patch'
     else
-      cd /opt/spp-settings
-      git sparse-checkout add patches/playerbots
-      git fetch --depth 1 origin
-      git reset --hard origin/HEAD
+      echo 'Skipped: PlayerbotAI.cpp patch (already applied or line not found)'
     fi
-    cd /opt/source/src/modules/playerbot
-    for patch in \$(ls /opt/spp-settings/patches/playerbots/*.patch 2>/dev/null | sort); do
-      git apply \"\$patch\" && echo \"Applied: \$(basename \$patch)\"
-    done
+    if grep -q 'ai->HasActivePlayerMaster()' \"\$DROPQ\" && ! grep -q 'IsAlt()' \"\$DROPQ\"; then
+      sed -i 's|if (ai->HasActivePlayerMaster())|if (ai->IsAlt() \\&\\& ai->HasActivePlayerMaster())|' \"\$DROPQ\"
+      echo 'Applied: DropQuestAction.cpp quest log patch'
+    else
+      echo 'Skipped: DropQuestAction.cpp patch (already applied or line not found)'
+    fi
   "
 
   local MODULE_FLAGS
@@ -1657,22 +1656,21 @@ update_core() {
     git checkout master
     git reset --hard origin/master
 
-    # Ensure spp-settings has patches/playerbots checked out and apply SPP patches
-    if [ ! -d /opt/spp-settings ]; then
-      git clone --depth 1 --filter=blob:none --sparse \
-        https://github.com/japtenks/spp-cmangos-prox.git /opt/spp-settings
-      cd /opt/spp-settings
-      git sparse-checkout set patches/playerbots
+    # Apply SPP patches via sed (content-match, resilient to upstream context shifts)
+    PLAIAI='/opt/source/src/modules/playerbot/playerbot/PlayerbotAI.cpp'
+    DROPQ='/opt/source/src/modules/playerbot/playerbot/strategy/actions/DropQuestAction.cpp'
+    if grep -q 'autoLoad && HasPlayerRelation()' \"\$PLAIAI\"; then
+      sed -i 's|if (autoLoad && HasPlayerRelation()) sPlayerbotDbStore.Load(this);|if (autoLoad) sPlayerbotDbStore.Load(this); // spp: guild flavor override|' \"\$PLAIAI\"
+      echo 'Applied: PlayerbotAI.cpp guild flavor patch'
     else
-      cd /opt/spp-settings
-      git sparse-checkout add patches/playerbots
-      git fetch --depth 1 origin
-      git reset --hard origin/HEAD
+      echo 'Skipped: PlayerbotAI.cpp patch (already applied or line not found)'
     fi
-    cd /opt/source/src/modules/playerbot
-    for patch in \$(ls /opt/spp-settings/patches/playerbots/*.patch 2>/dev/null | sort); do
-      git apply \"\$patch\" && echo \"Applied: \$(basename \$patch)\"
-    done
+    if grep -q 'ai->HasActivePlayerMaster()' \"\$DROPQ\" && ! grep -q 'IsAlt()' \"\$DROPQ\"; then
+      sed -i 's|if (ai->HasActivePlayerMaster())|if (ai->IsAlt() \\&\\& ai->HasActivePlayerMaster())|' \"\$DROPQ\"
+      echo 'Applied: DropQuestAction.cpp quest log patch'
+    else
+      echo 'Skipped: DropQuestAction.cpp patch (already applied or line not found)'
+    fi
   "
 
   local NEW_CORE NEW_BOT
