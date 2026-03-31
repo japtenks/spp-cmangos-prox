@@ -926,6 +926,10 @@ update_db_conf() {
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
+if [[ -z "${MASTER_EXPANSION:-}" ]]; then
+  MASTER_EXPANSION="$EXPANSION"
+fi
+
   # realmd.conf — master only, once
   local MASTER_INSTALL_DIR
   case "$MASTER_EXPANSION" in
