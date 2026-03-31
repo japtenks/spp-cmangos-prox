@@ -926,17 +926,24 @@ update_db_conf() {
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
+# auto-pick first installed expansion as master
 if [[ -z "${MASTER_EXPANSION:-}" ]]; then
-  MASTER_EXPANSION="$EXPANSION"
+  for EXP in classic tbc wotlk; do
+    if [[ -n "${GAME_CTIDS[$EXP]:-}" ]]; then
+      MASTER_EXPANSION="$EXP"
+      break
+    fi
+  done
 fi
 
-  # realmd.conf — master only, once
-  local MASTER_INSTALL_DIR
-  case "$MASTER_EXPANSION" in
-    classic) MASTER_INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     MASTER_INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   MASTER_INSTALL_DIR="/srv/mangos-wotlk" ;;
-  esac
+# fallback if nothing found
+: ${MASTER_EXPANSION:="$EXPANSION"}
+
+case "$MASTER_EXPANSION" in
+  classic) MASTER_INSTALL_DIR="/srv/mangos-classic" ;;
+  tbc)     MASTER_INSTALL_DIR="/srv/mangos-tbc" ;;
+  wotlk)   MASTER_INSTALL_DIR="/srv/mangos-wotlk" ;;
+esac
 
   if pct exec "$LOGIN_CTID" -- test -f "${MASTER_INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
     pct exec "$LOGIN_CTID" -- bash -c "
@@ -1629,6 +1636,13 @@ comp_server() {
     make -j\$(nproc)
     make install
     mkdir -p /var/log/mangos/
+    cd "$INSTALL_DIR/etc" || exit 1
+
+    for f in *.conf.dist; do
+    base=\${f%.dist}
+    [[ -f \$base ]] && continue
+    cp \$f \$base
+    done
   "
 
   update_core_metadata
