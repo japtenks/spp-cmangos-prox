@@ -1,0 +1,27 @@
+From 61d029c55f2d4f9b039e9ee05f6013f6b60083d3 Mon Sep 17 00:00:00 2001
+From: japtenks <japtenks@gmail.com>
+Date: Mon, 30 Mar 2026 17:31:56 -0500
+Subject: [PATCH 1/2] load DB strategy overrides for all bots (guild flavor
+ system)
+
+Removes HasPlayerRelation() guard from ResetStrategies() so bot-guild members with bot guild leaders load ai_playerbot_db_store overrides.
+---
+ playerbot/PlayerbotAI.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/playerbot/PlayerbotAI.cpp b/playerbot/PlayerbotAI.cpp
+index 8889bf3f..64e827c9 100644
+--- a/playerbot/PlayerbotAI.cpp
++++ b/playerbot/PlayerbotAI.cpp
+@@ -2398,7 +2398,7 @@ void PlayerbotAI::ResetStrategies(bool autoLoad)
+     AiFactory::AddDefaultNonCombatStrategies(bot, this, engines[(uint8)BotState::BOT_STATE_NON_COMBAT]);
+     AiFactory::AddDefaultDeadStrategies(bot, this, engines[(uint8)BotState::BOT_STATE_DEAD]);
+     AiFactory::AddDefaultReactionStrategies(bot, this, reactionEngine);
+-    if (autoLoad && HasPlayerRelation()) sPlayerbotDbStore.Load(this);
++    if (autoLoad) sPlayerbotDbStore.Load(this); // spp: guild flavor — load DB overrides for all bots, not just player-related ones
+ 
+     for (uint8 i = 0; i < (uint8)BotState::BOT_STATE_ALL; i++)
+     {
+-- 
+2.53.0.windows.1
+

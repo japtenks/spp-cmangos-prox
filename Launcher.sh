@@ -1515,7 +1515,7 @@ comp_server() {
       cd src/modules/playerbot
       git fetch
       git checkout master
-      git pull
+      git reset --hard origin/master
     else
       echo 'Cloning fresh core...'
       git clone $REPO source
@@ -1526,6 +1526,23 @@ comp_server() {
       cd src/modules
       git clone https://github.com/cmangos/playerbots.git playerbot
     fi
+
+    # Ensure spp-settings has patches/playerbots checked out and apply SPP patches
+    if [ ! -d /opt/spp-settings ]; then
+      git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/japtenks/spp-cmangos-prox.git /opt/spp-settings
+      cd /opt/spp-settings
+      git sparse-checkout set patches/playerbots
+    else
+      cd /opt/spp-settings
+      git sparse-checkout add patches/playerbots
+      git fetch --depth 1 origin
+      git reset --hard origin/HEAD
+    fi
+    cd /opt/source/src/modules/playerbot
+    for patch in \$(ls /opt/spp-settings/patches/playerbots/*.patch 2>/dev/null | sort); do
+      git apply \"\$patch\" && echo \"Applied: \$(basename \$patch)\"
+    done
   "
 
   pct exec "$GAME_CTID" -- bash -c "
@@ -1553,7 +1570,8 @@ comp_server() {
       -DBUILD_MODULE_BALANCING=ON \
       -DBUILD_MODULE_BARBER=ON \
       -DBUILD_MODULE_TRAININGDUMMIES=ON \
-      -DBUILD_MODULE_VOICEOVER=ON
+      -DBUILD_MODULE_VOICEOVER=ON \
+      -DBUILD_MODULE_EXTRACOMMANDS=ON
     make -j\$(nproc)
     make install
     mkdir -p /var/log/mangos/
@@ -1585,7 +1603,25 @@ update_core() {
     sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
     cd src/modules/playerbot
     git fetch
-    git pull
+    git checkout master
+    git reset --hard origin/master
+
+    # Ensure spp-settings has patches/playerbots checked out and apply SPP patches
+    if [ ! -d /opt/spp-settings ]; then
+      git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/japtenks/spp-cmangos-prox.git /opt/spp-settings
+      cd /opt/spp-settings
+      git sparse-checkout set patches/playerbots
+    else
+      cd /opt/spp-settings
+      git sparse-checkout add patches/playerbots
+      git fetch --depth 1 origin
+      git reset --hard origin/HEAD
+    fi
+    cd /opt/source/src/modules/playerbot
+    for patch in \$(ls /opt/spp-settings/patches/playerbots/*.patch 2>/dev/null | sort); do
+      git apply \"\$patch\" && echo \"Applied: \$(basename \$patch)\"
+    done
   "
 
   local NEW_CORE NEW_BOT

@@ -1,0 +1,31 @@
+From bebcd8575a611aa5de17c11cbf032009c0e05ecd Mon Sep 17 00:00:00 2001
+From: japtenks <japtenks@gmail.com>
+Date: Mon, 30 Mar 2026 19:10:19 -0500
+Subject: [PATCH 2/2] fix CleanQuestLogAction blocking random bots grouped with
+ players
+
+Only skip quest log cleanup when the bot is a player alt (IsAlt()).
+Random bots that happen to be grouped with a player were also being
+blocked, causing quest log bloat (45k+ orphaned status=1 rows).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+---
+ playerbot/strategy/actions/DropQuestAction.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/playerbot/strategy/actions/DropQuestAction.cpp b/playerbot/strategy/actions/DropQuestAction.cpp
+index c730cf68..dcb4718f 100644
+--- a/playerbot/strategy/actions/DropQuestAction.cpp
++++ b/playerbot/strategy/actions/DropQuestAction.cpp
+@@ -51,7 +51,7 @@ bool CleanQuestLogAction::Execute(Event& event)
+ {
+     Player* requester = event.getOwner() ? event.getOwner() : GetMaster();
+     std::string link = event.getParam();
+-    if (ai->HasActivePlayerMaster())
++    if (ai->IsAlt() && ai->HasActivePlayerMaster())
+         return false;
+ 
+     uint8 totalQuests = 0;
+-- 
+2.53.0.windows.1
+
