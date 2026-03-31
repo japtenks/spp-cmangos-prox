@@ -184,6 +184,20 @@ WOTLK_BOTS_VERSION=17
 WOTLK_WEBSITE_VERSION=6
 WOTLK_MAPS_VERSION=2
 MASTER_EXPANSION=""
+
+# Module build toggles (ON/OFF) — edit via Launcher "Configure Modules" or directly
+MODULE_ACHIEVEMENTS=ON
+MODULE_IMMERSIVE=ON
+MODULE_HARDCORE=ON
+MODULE_TRANSMOG=ON
+MODULE_DUALSPEC=ON
+MODULE_BOOST=ON
+MODULE_CUSTOM20=ON
+MODULE_BALANCING=ON
+MODULE_BARBER=ON
+MODULE_TRAININGDUMMIES=ON
+MODULE_VOICEOVER=ON
+MODULE_EXTRACOMMANDS=ON
 EOF
   echo "config.env created."
 fi
@@ -1472,6 +1486,7 @@ core_menu() {
     echo
     echo "1 - Clean Rebuild"
     echo "2 - Incremental Update"
+    echo "3 - Configure Modules"
     echo "0 - Back"
     echo
 
@@ -1489,8 +1504,52 @@ core_menu() {
         read -p "Confirm update? (YES): " CONFIRM
         [[ "$CONFIRM" == "YES" ]] && update_core
         ;;
+      3) configure_modules ;;
       0) return ;;
     esac
+  done
+}
+
+SPP_MODULES=(ACHIEVEMENTS IMMERSIVE HARDCORE TRANSMOG DUALSPEC BOOST CUSTOM20 BALANCING BARBER TRAININGDUMMIES VOICEOVER EXTRACOMMANDS)
+
+build_module_flags() {
+  local flags=""
+  for mod in "${SPP_MODULES[@]}"; do
+    local var="MODULE_${mod}"
+    local val="${!var:-ON}"
+    flags+=" -DBUILD_MODULE_${mod}=${val}"
+  done
+  echo "$flags"
+}
+
+configure_modules() {
+  while true; do
+    print_banner
+    echo
+    echo "Module Configuration  (changes saved immediately to config.env)"
+    echo
+    local i=1
+    for mod in "${SPP_MODULES[@]}"; do
+      local var="MODULE_${mod}"
+      local val="${!var:-ON}"
+      printf "  %2d - %-20s [%s]\n" "$i" "$mod" "$val"
+      ((i++))
+    done
+    echo
+    echo "   0 - Back"
+    echo
+    read -p "Toggle module #: " SEL
+    [[ "$SEL" == "0" ]] && return
+    if [[ "$SEL" =~ ^[0-9]+$ ]] && (( SEL >= 1 && SEL <= ${#SPP_MODULES[@]} )); then
+      local mod="${SPP_MODULES[$((SEL-1))]}"
+      local var="MODULE_${mod}"
+      local cur="${!var:-ON}"
+      local new="OFF"; [[ "$cur" == "OFF" ]] && new="ON"
+      eval "MODULE_${mod}=${new}"
+      sed -i "s/^MODULE_${mod}=.*/MODULE_${mod}=${new}/" "$CONFIG_FILE"
+      echo "  $mod → $new"
+      sleep 0.5
+    fi
   done
 }
 
@@ -1545,6 +1604,9 @@ comp_server() {
     done
   "
 
+  local MODULE_FLAGS
+  MODULE_FLAGS=$(build_module_flags)
+
   pct exec "$GAME_CTID" -- bash -c "
     set -e
     cd /opt/source
@@ -1560,18 +1622,7 @@ comp_server() {
       -DBUILD_AHBOT=ON \
       -DBUILD_MODULES=ON \
       -DBUILD_GIT_ID=ON \
-      -DBUILD_MODULE_ACHIEVEMENTS=ON \
-      -DBUILD_MODULE_IMMERSIVE=ON \
-      -DBUILD_MODULE_HARDCORE=ON \
-      -DBUILD_MODULE_TRANSMOG=ON \
-      -DBUILD_MODULE_DUALSPEC=ON \
-      -DBUILD_MODULE_BOOST=ON \
-      -DBUILD_MODULE_CUSTOM20=ON \
-      -DBUILD_MODULE_BALANCING=ON \
-      -DBUILD_MODULE_BARBER=ON \
-      -DBUILD_MODULE_TRAININGDUMMIES=ON \
-      -DBUILD_MODULE_VOICEOVER=ON \
-      -DBUILD_MODULE_EXTRACOMMANDS=ON
+      $MODULE_FLAGS
     make -j\$(nproc)
     make install
     mkdir -p /var/log/mangos/
