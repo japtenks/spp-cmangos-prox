@@ -3212,9 +3212,10 @@ server_info_menu() {
     echo "1 - World Settings"
     echo "2 - Bots Settings"
     echo "3 - RealmD Settings"
-	echo
+    echo
     echo "4 - Change Server Address"
     echo "5 - Change Realm Name"
+    echo "6 - Other Settings"
 
     echo "7 - Crash Logs"
     echo "8 - Analyze Crash (GDB)"
@@ -3230,6 +3231,7 @@ server_info_menu() {
 	  3) edit_realmd_settings ;;
       4) change_server_address ;;
       5) change_realm_name ;;
+      6) edit_other_settings ;;
 
       7) view_crash_logs ;;
       8) analyze_crash ;;
@@ -3249,6 +3251,61 @@ edit_bot_settings() {
 }
 edit_realmd_settings() {
   pct exec "$LOGIN_CTID" -- nano /srv/mangos-$EXPANSION/etc/realmd.conf
+}
+edit_other_settings() {
+  local GAME_ETC="/srv/mangos-$EXPANSION/etc"
+  local LOGIN_ETC="/srv/mangos-$EXPANSION/etc"
+  local -a LABELS=()
+  local -a TARGETS=()
+  local -a PATHS=()
+
+  while IFS= read -r conf; do
+    [[ -z "$conf" ]] && continue
+    case "$(basename "$conf")" in
+      mangosd.conf|aiplayerbot.conf) continue ;;
+    esac
+    LABELS+=("Game: $(basename "$conf")")
+    TARGETS+=("$GAME_CTID")
+    PATHS+=("$conf")
+  done < <(pct exec "$GAME_CTID" -- bash -lc "find '$GAME_ETC' -maxdepth 1 -type f -name '*.conf' | sort" 2>/dev/null)
+
+  while IFS= read -r conf; do
+    [[ -z "$conf" ]] && continue
+    case "$(basename "$conf")" in
+      realmd.conf) continue ;;
+    esac
+    LABELS+=("Login: $(basename "$conf")")
+    TARGETS+=("$LOGIN_CTID")
+    PATHS+=("$conf")
+  done < <(pct exec "$LOGIN_CTID" -- bash -lc "find '$LOGIN_ETC' -maxdepth 1 -type f -name '*.conf' | sort" 2>/dev/null)
+
+  if (( ${#LABELS[@]} == 0 )); then
+    echo "No additional config files found."
+    read -p "Press Enter to continue..." _
+    return
+  fi
+
+  while true; do
+    echo
+    echo "Other Config Files"
+    echo
+    local i
+    for ((i=0; i<${#LABELS[@]}; i++)); do
+      printf "%d - %s\n" "$((i+1))" "${LABELS[$i]}"
+    done
+    echo "0 - Back"
+    echo
+
+    read -p "Selection: " OTHER_SEL
+    [[ "$OTHER_SEL" == "0" ]] && return
+
+    if [[ "$OTHER_SEL" =~ ^[0-9]+$ ]] && (( OTHER_SEL >= 1 && OTHER_SEL <= ${#LABELS[@]} )); then
+      local idx=$((OTHER_SEL-1))
+      pct exec "${TARGETS[$idx]}" -- nano "${PATHS[$idx]}"
+    else
+      echo "Invalid selection."
+    fi
+  done
 }
 change_server_address() {
   read -p "Enter new public IP: " NEWIP
