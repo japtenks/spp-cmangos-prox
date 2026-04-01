@@ -30,3 +30,5 @@ sql/cata/world.sql
 Saves
 !Changelog/*.txt
 /Sagrid-Argus/patch
+scripts/copy_tbc_dbs_over_ssh.sh
+Settings/vanilla/aiplayerbot.conf.old1

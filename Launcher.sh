@@ -2753,7 +2753,7 @@ chmod 755 /usr/local/bin/spp-bot-rotation-log.sh
 cat > /etc/cron.d/spp-bot-rotation-log <<'EOF'
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-*/30 * * * * root /usr/local/bin/spp-bot-rotation-log.sh >/var/log/spp-bot-rotation-log.log 2>&1
+*/15 * * * * root /usr/local/bin/spp-bot-rotation-log.sh >/var/log/spp-bot-rotation-log.log 2>&1
 EOF
 
 chmod 644 /etc/cron.d/spp-bot-rotation-log
