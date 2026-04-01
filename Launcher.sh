@@ -1668,11 +1668,17 @@ core_menu() {
         if [[ "${CONFIRM^^}" == "Y" ]]; then
           pct exec "$GAME_CTID" -- rm -rf /opt/source
           comp_server
+          echo
+          read -p "Core rebuild finished. Press Enter to continue..." _
         fi
         ;;
       2)
         read -p "Confirm update? (YES): " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && update_core
+        if [[ "$CONFIRM" == "YES" ]]; then
+          update_core
+          echo
+          read -p "Core update finished. Press Enter to continue..." _
+        fi
         ;;
       3) configure_modules ;;
       0) return ;;
