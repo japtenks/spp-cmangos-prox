@@ -1775,6 +1775,14 @@ comp_server() {
 
   local MODULE_FLAGS
   MODULE_FLAGS=$(build_module_flags)
+  local EXPECTED_MODULES=""
+  for mod in "${SPP_MODULES[@]}"; do
+    local var="MODULE_${mod}"
+    local val="${!var:-ON}"
+    if [[ "$val" == "ON" ]]; then
+      EXPECTED_MODULES+=" $(echo "$mod" | tr '[:upper:]' '[:lower:]')"
+    fi
+  done
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -1792,6 +1800,29 @@ comp_server() {
       -DBUILD_MODULES=ON \
       -DBUILD_GIT_ID=ON \
       $MODULE_FLAGS
+    cmake .. \
+      -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DBUILD_EXTRACTORS=OFF \
+      -DPCH=1 \
+      -DDEBUG=0 \
+      -DBUILD_PLAYERBOTS=ON \
+      -DBUILD_AHBOT=ON \
+      -DBUILD_MODULES=ON \
+      -DBUILD_GIT_ID=ON \
+      $MODULE_FLAGS
+    GENERATED_MODULES_FILE='/opt/source/src/modules/modules/src/Modules.cpp'
+    if [[ ! -f \"\$GENERATED_MODULES_FILE\" ]]; then
+      echo 'ERROR: Generated Modules.cpp not found after configure.'
+      exit 1
+    fi
+    for lower_module in $EXPECTED_MODULES; do
+      expected_class=\"\${lower_module^}Module\"
+      if ! grep -q \"\$expected_class\" \"\$GENERATED_MODULES_FILE\"; then
+        echo \"ERROR: Expected module '\$lower_module' missing from generated Modules.cpp\"
+        exit 1
+      fi
+    done
     make -j\$(nproc)
     make install
     mkdir -p /var/log/mangos/
@@ -1889,7 +1920,18 @@ write_version "${EXPANSION}_core_version.spp" \
 }
 
 check_and_update_botconf() {
-  # Requires: EXPANSION, MAP_KEY, GAME_CTID, INSTALL_DIR already set
+  # Requires: EXPANSION, MAP_KEY, GAME_CTID already set
+
+  local INSTALL_DIR
+  case "$EXPANSION" in
+    classic) INSTALL_DIR="/srv/mangos-classic" ;;
+    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
+    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+    *)
+      echo "WARNING: Unknown expansion '$EXPANSION' for botconf deploy. Skipping."
+      return 0
+      ;;
+  esac
 
   local CONF_PATH="${INSTALL_DIR}/etc/aiplayerbot.conf"
   local VERSION_FILE="/opt/${EXPANSION}_botconf_version.spp"
@@ -1999,6 +2041,7 @@ _deploy_botconf() {
   fi
 
   # Copy new conf from repo
+  pct exec "$GAME_CTID" -- mkdir -p "$(dirname "$CONF_PATH")"
   pct exec "$GAME_CTID" -- cp "/opt/spp-settings/${CONF_REL}" "$CONF_PATH"
 
   # Record repo hash + content hash of what we just deployed
