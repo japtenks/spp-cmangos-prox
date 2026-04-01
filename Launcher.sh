@@ -515,6 +515,155 @@ stat_state() {
     STACK_STATUS="Stopped"
     STACK_ACTION="Start Stack"
   fi
+
+  BOT_ROTATION_STATUS=$(get_bot_rotation_status)
+}
+
+manage_bot_rotation_pause() {
+  local ACTION=${1:-status}
+  local REASON=${2:-manual}
+
+  pct exec "$GAME_CTID" -- bash -s -- "$ACTION" "$REASON" <<'__SPP_BOT_ROTATION_STATE__'
+set -euo pipefail
+
+action="$1"
+reason="$2"
+cron_file="/etc/cron.d/spp-bot-rotation-log"
+disabled_file="${cron_file}.disabled"
+tracker_dir="/var/lib/spp"
+tracker_file="${tracker_dir}/bot-rotation-mangosd.state"
+
+mkdir -p "$tracker_dir"
+
+pause_count=0
+mismatch_count=0
+last_action="none"
+last_reason="none"
+last_updated="never"
+
+if [[ -f "$tracker_file" ]]; then
+  # shellcheck disable=SC1090
+  source "$tracker_file"
+fi
+
+get_actual_status() {
+  if [[ -f "$cron_file" ]]; then
+    echo "active"
+  elif [[ -f "$disabled_file" ]]; then
+    echo "paused"
+  else
+    echo "missing"
+  fi
+}
+
+restart_cron_if_present() {
+  if systemctl list-unit-files cron.service >/dev/null 2>&1; then
+    systemctl restart cron
+  fi
+}
+
+actual_status=$(get_actual_status)
+
+case "$action" in
+  pause)
+    pause_count=$((pause_count + 1))
+    if [[ "$actual_status" == "active" ]]; then
+      mv "$cron_file" "$disabled_file"
+      restart_cron_if_present
+      actual_status="paused"
+    fi
+    ;;
+  resume)
+    if (( pause_count > 0 )); then
+      pause_count=$((pause_count - 1))
+    else
+      mismatch_count=$((mismatch_count + 1))
+    fi
+
+    if (( pause_count == 0 )) && [[ "$actual_status" == "paused" ]]; then
+      mv "$disabled_file" "$cron_file"
+      restart_cron_if_present
+      actual_status="active"
+    fi
+    ;;
+  status)
+    ;;
+  *)
+    echo "invalid-action:$action"
+    exit 1
+    ;;
+esac
+
+last_action="$action"
+actual_status=$(get_actual_status)
+
+if [[ "$action" != "status" ]]; then
+last_reason="$reason"
+last_updated=$(date -Iseconds)
+
+cat > "$tracker_file" <<EOF
+pause_count=$pause_count
+mismatch_count=$mismatch_count
+last_action="$last_action"
+last_reason="$last_reason"
+last_updated="$last_updated"
+actual_status="$actual_status"
+EOF
+fi
+
+printf 'status=%s pause_count=%s mismatches=%s last_action=%s reason=%s updated=%s\n' \
+  "$actual_status" "$pause_count" "$mismatch_count" "$last_action" "$last_reason" "$last_updated"
+__SPP_BOT_ROTATION_STATE__
+}
+
+get_bot_rotation_status() {
+  if [[ -z "${GAME_CTID:-}" ]]; then
+    echo "unknown"
+    return
+  fi
+
+  if [[ "$(pct status "$GAME_CTID" | awk '{print $2}')" != "running" ]]; then
+    echo "unavailable (game container stopped)"
+    return
+  fi
+
+  local TRACKER
+  TRACKER=$(manage_bot_rotation_pause status "status-check" 2>/dev/null || true)
+
+  if [[ -z "$TRACKER" ]]; then
+    echo "unknown"
+    return
+  fi
+
+  local STATUS PAUSES MISMATCHES
+  STATUS=$(awk '{for (i=1;i<=NF;i++) if ($i ~ /^status=/) {sub(/^status=/,"",$i); print $i}}' <<< "$TRACKER")
+  PAUSES=$(awk '{for (i=1;i<=NF;i++) if ($i ~ /^pause_count=/) {sub(/^pause_count=/,"",$i); print $i}}' <<< "$TRACKER")
+  MISMATCHES=$(awk '{for (i=1;i<=NF;i++) if ($i ~ /^mismatches=/) {sub(/^mismatches=/,"",$i); print $i}}' <<< "$TRACKER")
+
+  if [[ -z "$STATUS" ]]; then
+    echo "unknown"
+    return
+  fi
+
+  echo "${STATUS} (holds=${PAUSES:-0}, mismatches=${MISMATCHES:-0})"
+}
+
+stop_mangosd_managed() {
+  local REASON=${1:-manual-stop}
+
+  manage_bot_rotation_pause pause "$REASON" >/dev/null
+  pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
+}
+
+start_mangosd_managed() {
+  local REASON=${1:-manual-start}
+
+  if pct exec "$GAME_CTID" -- systemctl start mangosd 2>/dev/null; then
+    manage_bot_rotation_pause resume "$REASON" >/dev/null
+  else
+    echo "mangosd failed to start; bot rotation cron left unchanged."
+    return 1
+  fi
 }
 
 print_banner() {
@@ -863,7 +1012,7 @@ derive_db_names || return 1
 ASSET_DIR="/opt/spp-assets/Sagrid-Argus"
 
 echo "Stopping world server..."
-pct exec "$GAME_CTID" -- systemctl stop mangosd || true
+stop_mangosd_managed "sagrid-argus-install"
 
 echo "Fetching repo..."
 mkdir -p /opt/spp-assets
@@ -895,7 +1044,7 @@ pct exec "$WEB_CTID" -- mkdir -p /var/www/html/downloads/tools
 pct push "$WEB_CTID" /opt/spp-assets/spp-cmangos-prox/Sagrid-Argus/patch/patch-s.mpq /var/www/html/downloads/tools/patch-s.mpq
 
 echo "Starting world server..."
-pct exec "$GAME_CTID" -- systemctl start mangosd
+start_mangosd_managed "sagrid-argus-install"
 }
 
 shared_config_menu() {
@@ -1431,7 +1580,7 @@ apply_autostart_setting() {
     pct exec "$LOGIN_CTID" -- systemctl enable realmd
     pct exec "$GAME_CTID" -- systemctl enable mangosd
 	pct exec "$LOGIN_CTID" -- systemctl start realmd
-    pct exec "$GAME_CTID" -- systemctl start mangosd
+    start_mangosd_managed "autostart-enable"
     echo "Autostart ENABLED"
   else
     pct exec "$LOGIN_CTID" -- systemctl disable realmd
@@ -1707,7 +1856,7 @@ update_core() {
 
   if [[ "$OLD_CORE" != "$NEW_CORE" || "$OLD_BOT" != "$NEW_BOT" ]]; then
     echo "Changes detected — rebuilding..."
-    pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
+    stop_mangosd_managed "core-rebuild"
 
     pct exec "$GAME_CTID" -- bash -c "
       set -e
@@ -1716,7 +1865,7 @@ update_core() {
       make install
     "
 
-    pct exec "$GAME_CTID" -- systemctl start mangosd 2>/dev/null || true
+    start_mangosd_managed "core-rebuild"
   else
     echo "No core or bot changes — skipping rebuild."
   fi
@@ -2792,7 +2941,7 @@ full_install() {
   derive_db_names || return 1
 
   echo "Stopping services..."
-  pct exec "$GAME_CTID" -- systemctl stop mangosd 2>/dev/null || true
+  stop_mangosd_managed "full-install"
 
   if is_master; then
     pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
@@ -2885,6 +3034,8 @@ stack_control_menu() {
     print_banner
     stat_state
     echo
+    echo "Bot rotation cron: $BOT_ROTATION_STATUS"
+    echo
     #echo "$GAME_CTID - $EXPANSION Control"
     #echo "Status: $STACK_STATUS"
     #echo
@@ -2918,6 +3069,7 @@ GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
 
   echo
   echo "=== STACK STATUS ==="
+  echo "Bot rotation cron: $(get_bot_rotation_status)"
 
   for CT in "$LOGIN_CTID" "$GAME_CTID" "$WEB_CTID" "$DB_CTID"; do
 
@@ -2971,6 +3123,7 @@ stop_world() {
   fi
 
   echo "Stopping World..."
+  stop_mangosd_managed "stack-stop"
   pct stop "$GAME_CTID"
 }
 start_stack() {
@@ -2986,7 +3139,7 @@ done
 pct exec "$DB_CTID" -- systemctl start mariadb
 pct exec "$LOGIN_CTID" -- systemctl start realmd
 pct exec "$WEB_CTID" -- systemctl start apache2
-pct exec "$GAME_CTID" -- systemctl start mangosd
+start_mangosd_managed "stack-start"
 sync_bot_rotation_config || true
 
 }
