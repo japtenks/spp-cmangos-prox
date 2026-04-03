@@ -1857,6 +1857,16 @@ update_core() {
   local OLD_CORE OLD_BOT
   OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
   OLD_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
+  local MODULE_FLAGS
+  MODULE_FLAGS=$(build_module_flags)
+  local EXPECTED_MODULES=""
+  for mod in "${SPP_MODULES[@]}"; do
+    local var="MODULE_${mod}"
+    local val="${!var:-ON}"
+    if [[ "$val" == "ON" ]]; then
+      EXPECTED_MODULES+=" $(echo "$mod" | tr '[:upper:]' '[:lower:]')"
+    fi
+  done
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -1885,19 +1895,38 @@ update_core() {
     else
       echo 'Skipped: DropQuestAction.cpp patch (already applied or line not found)'
     fi
+
+    echo 'Refreshing fetched module sources...'
+    rm -rf /opt/source/src/modules/modules
+    for lower_module in $EXPECTED_MODULES; do
+      rm -rf \"/opt/source/src/modules/\$lower_module\"
+    done
   "
 
   local NEW_CORE NEW_BOT
   NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
   NEW_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
 
-  if [[ "$OLD_CORE" != "$NEW_CORE" || "$OLD_BOT" != "$NEW_BOT" ]]; then
+  if true; then
     echo "Changes detected — rebuilding..."
     stop_mangosd_managed "core-rebuild"
 
     pct exec "$GAME_CTID" -- bash -c "
       set -e
+      rm -rf /opt/source/build
+      mkdir -p /opt/source/build
       cd /opt/source/build
+      cmake .. \
+        -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_EXTRACTORS=OFF \
+        -DPCH=1 \
+        -DDEBUG=0 \
+        -DBUILD_PLAYERBOTS=ON \
+        -DBUILD_AHBOT=ON \
+        -DBUILD_MODULES=ON \
+        -DBUILD_GIT_ID=ON \
+        $MODULE_FLAGS
       make -j\$(nproc)
       make install
     "
