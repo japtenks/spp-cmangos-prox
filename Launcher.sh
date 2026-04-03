@@ -1732,7 +1732,7 @@ configure_modules() {
 comp_server() {
 
   case "$EXPANSION" in
-    classic) REPO="https://github.com/celguar/mangos-classic.git"; INSTALL_DIR="/srv/mangos-classic" ;;
+    classic) REPO="https://github.com/japtenks/mangos-classic.git"; INSTALL_DIR="/srv/mangos-classic" ;;
     tbc)     REPO="https://github.com/celguar/mangos-tbc.git";     INSTALL_DIR="/srv/mangos-tbc" ;;
     wotlk)   REPO="https://github.com/celguar/mangos-wotlk.git";   INSTALL_DIR="/srv/mangos-wotlk" ;;
   esac
