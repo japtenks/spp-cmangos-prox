@@ -1955,13 +1955,23 @@ write_version "${EXPANSION}_core_version.spp" \
 }
 
 check_and_update_botconf() {
-  # Requires: EXPANSION, MAP_KEY, GAME_CTID already set
+  # Requires: EXPANSION and GAME_CTID already set
 
   local INSTALL_DIR
+  local MAP_KEY
   case "$EXPANSION" in
-    classic) INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
+    classic)
+      INSTALL_DIR="/srv/mangos-classic"
+      MAP_KEY="vanilla"
+      ;;
+    tbc)
+      INSTALL_DIR="/srv/mangos-tbc"
+      MAP_KEY="tbc"
+      ;;
+    wotlk)
+      INSTALL_DIR="/srv/mangos-wotlk"
+      MAP_KEY="wotlk"
+      ;;
     *)
       echo "WARNING: Unknown expansion '$EXPANSION' for botconf deploy. Skipping."
       return 0
