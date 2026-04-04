@@ -1073,6 +1073,8 @@ shared_config_menu() {
 
 update_db_conf() {
   derive_db_names || return 1
+  local TARGET_EXPANSION="${1:-$EXPANSION}"
+  local CONFIG_EXPANSIONS=("$TARGET_EXPANSION")
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
@@ -1118,8 +1120,8 @@ update_db_conf() {
     echo "realmd.conf updated."
   fi
 
-  # mangosd.conf — only valid installs
-  for EXP in classic tbc wotlk; do
+  # mangosd.conf — only update the expansion currently being installed/updated
+  for EXP in "${CONFIG_EXPANSIONS[@]}"; do
     [[ -z "${GAME_CTIDS[$EXP]:-}" ]] && continue
 
     GAME_CTID="${GAME_CTIDS[$EXP]}"
