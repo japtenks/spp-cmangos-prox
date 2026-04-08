@@ -16,7 +16,7 @@ auto_detect_stack() {
   WEB_CTID=$(awk '$3=="spp-web"  {print $1}' <<< "$_pct") || true
   LOGIN_CTID=$(awk '$3=="spp-login" {print $1}' <<< "$_pct") || true
   local _exp _ct
-  for _exp in classic tbc wotlk; do
+  for _exp in classic tbc wotlk vmangos; do
     _ct=$(awk -v name="spp-$_exp" '$3==name {print $1}' <<< "$_pct") || true
     [[ -n "$_ct" ]] && GAME_CTIDS[$_exp]=$_ct
   done
@@ -94,12 +94,13 @@ if [[ ! -f $CONFIG_FILE ]]; then
     read -p "  spp-classic IP (leave blank to skip): " IP_CLASSIC
     read -p "  spp-tbc     IP (leave blank to skip): " IP_TBC
     read -p "  spp-wotlk   IP (leave blank to skip): " IP_WOTLK
+    read -p "  spp-vmangos IP (leave blank to skip): " IP_VMANGOS
   else
     NETWORK_MODE="dhcp"
     NET_BRIDGE="vmbr0"
     NET_GW=""
     IP_DB="" IP_WEB="" IP_LOGIN=""
-    IP_CLASSIC="" IP_TBC="" IP_WOTLK=""
+    IP_CLASSIC="" IP_TBC="" IP_WOTLK="" IP_VMANGOS=""
   fi
   echo
 
@@ -118,7 +119,7 @@ if [[ ! -f $CONFIG_FILE ]]; then
 
   # ---- Write full base config ----
   cat <<EOF > "$CONFIG_FILE"
-ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk")
+ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 INSTALLED_EXPANSIONS=()
 AUTO_START="0"
 ASV="Off"
@@ -157,6 +158,7 @@ IP_LOGIN="$IP_LOGIN"
 IP_CLASSIC="$IP_CLASSIC"
 IP_TBC="$IP_TBC"
 IP_WOTLK="$IP_WOTLK"
+IP_VMANGOS="$IP_VMANGOS"
 
 # Version Tracking
 CLASSIC_CORE_VERSION=48
@@ -183,6 +185,14 @@ WOTLK_LOGS_VERSION=1
 WOTLK_BOTS_VERSION=17
 WOTLK_WEBSITE_VERSION=6
 WOTLK_MAPS_VERSION=2
+VMANGOS_CORE_VERSION=1
+VMANGOS_WORLD_VERSION=1
+VMANGOS_CHARS_VERSION=1
+VMANGOS_REALM_VERSION=1
+VMANGOS_LOGS_VERSION=1
+VMANGOS_BOTS_VERSION=1
+VMANGOS_WEBSITE_VERSION=0
+VMANGOS_MAPS_VERSION=1
 MASTER_EXPANSION=""
 
 # Module build toggles (ON/OFF) — edit via Launcher "Configure Modules" or directly
@@ -211,13 +221,80 @@ GAME_CTID="${GAME_CTID:-}"
 EXPANSION=""
 
 declare -A VERSION_MAP
-for EXP in classic tbc wotlk; do
+for EXP in classic tbc wotlk vmangos; do
   KEY=$(echo "$EXP" | tr '[:lower:]' '[:upper:]')
   for TYPE in WORLD CORE REALM CHARS LOGS MAPS WEBSITE; do
     VAR="${KEY}_${TYPE}_VERSION"
     VERSION_MAP["$EXP:$TYPE"]="${!VAR:-0}"
   done
 done
+
+expansion_title() {
+  case "$1" in
+    vmangos) echo "vMaNGOS" ;;
+    *) echo "${1^}" ;;
+  esac
+}
+
+expansion_settings_key() {
+  case "$1" in
+    classic) echo "vanilla" ;;
+    tbc|wotlk|vmangos) echo "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_install_dir() {
+  case "$1" in
+    classic) echo "/srv/mangos-classic" ;;
+    tbc) echo "/srv/mangos-tbc" ;;
+    wotlk) echo "/srv/mangos-wotlk" ;;
+    vmangos) echo "/srv/vmangos" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_repo() {
+  case "$1" in
+    classic) echo "https://github.com/japtenks/mangos-classic.git" ;;
+    tbc) echo "https://github.com/celguar/mangos-tbc.git" ;;
+    wotlk) echo "https://github.com/celguar/mangos-wotlk.git" ;;
+    vmangos) echo "https://github.com/vmangos/core.git" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_branch() {
+  case "$1" in
+    classic|tbc|wotlk) echo "ike3-bots" ;;
+    vmangos) echo "vmangos-ike3-playerbots" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_realm_db_name() {
+  case "$1" in
+    classic) echo "classicrealmd" ;;
+    tbc) echo "tbcrealmd" ;;
+    wotlk) echo "wotlkrealmd" ;;
+    vmangos) echo "vmangosrealmd" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_realm_id() {
+  case "$1" in
+    classic) echo 1 ;;
+    tbc) echo 2 ;;
+    wotlk) echo 3 ;;
+    vmangos) echo 4 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_vmangos() {
+  [[ "${1:-$EXPANSION}" == "vmangos" ]]
+}
 
 
 #helper functions
@@ -236,6 +313,7 @@ get_container_ip() {
         classic) echo "${IP_CLASSIC:-}" ;;
         tbc)     echo "${IP_TBC:-}" ;;
         wotlk)   echo "${IP_WOTLK:-}" ;;
+        vmangos) echo "${IP_VMANGOS:-}" ;;
       esac ;;
   esac
 }
@@ -357,7 +435,9 @@ EOF
     game)
       pct exec "$CTID" -- apt install -y \
         git build-essential cmake \
+        mariadb-client rsync \
         libssl-dev libbz2-dev libreadline-dev \
+        libcurl4-openssl-dev zlib1g-dev \
         libncurses-dev libmariadb-dev libmariadb-dev-compat \
         libboost-all-dev libace-dev unzip wget p7zip-full \
         gdb
@@ -398,34 +478,29 @@ derive_db_names() {
     classic) DB_KEY="classic"; MAP_KEY="vanilla" ;;
     tbc)     DB_KEY="tbc";     MAP_KEY="tbc" ;;
     wotlk)   DB_KEY="wotlk";   MAP_KEY="wotlk" ;;
+    vmangos) DB_KEY="vmangos"; MAP_KEY="vmangos" ;;
     *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
   esac
 
-  WORLD_DB="${DB_KEY}mangos"
+  if is_vmangos; then
+    WORLD_DB="${DB_KEY}"
+  else
+    WORLD_DB="${DB_KEY}mangos"
+  fi
   CHAR_DB_NAME="${DB_KEY}characters"
   LOG_DB_NAME="${DB_KEY}logs"
+  SETTINGS_KEY=$(expansion_settings_key "$EXPANSION") || return 1
+  INSTALL_DIR=$(expansion_install_dir "$EXPANSION") || return 1
+  EXPANSION_TITLE=$(expansion_title "$EXPANSION")
 
   # Realm DB always belongs to master expansion
   # Falls back to current expansion if master not yet set (first install)
   local MASTER="${MASTER_EXPANSION:-$EXPANSION}"
-  case "$MASTER" in
-    classic) REALM_DB_NAME="classicrealmd" ;;
-    tbc)     REALM_DB_NAME="tbcrealmd" ;;
-    wotlk)   REALM_DB_NAME="wotlkrealmd" ;;
-    *) echo "Unknown master expansion: $MASTER"; return 1 ;;
-  esac
-
-  case "$EXPANSION" in
-    classic) INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-  esac
-
-  case "$EXPANSION" in
-    classic) REALM_ID=1 ;;
-    tbc)     REALM_ID=2 ;;
-    wotlk)   REALM_ID=3 ;;
-  esac
+  REALM_DB_NAME=$(expansion_realm_db_name "$MASTER") || {
+    echo "Unknown master expansion: $MASTER"
+    return 1
+  }
+  REALM_ID=$(expansion_realm_id "$EXPANSION") || return 1
 }
 
 pin_master_expansion() {
@@ -847,7 +922,7 @@ expansion_menu() {
       EXP="${ALLOWED_EXPANSIONS[$i]}"
       CTID="${GAME_CTIDS[$EXP]:-}"
       STATUS=$([[ -n "$CTID" ]] && echo "[Installed - CTID $CTID]" || echo "[Not Installed]")
-      echo "$((i+1)) - ${EXP^}"
+      echo "$((i+1)) - $(expansion_title "$EXP")"
       echo "       $STATUS"
       echo
     done
@@ -1080,7 +1155,7 @@ update_db_conf() {
 
   # auto-pick first installed expansion as master
   if [[ -z "${MASTER_EXPANSION:-}" ]]; then
-    for EXP in classic tbc wotlk; do
+    for EXP in classic tbc wotlk vmangos; do
       if [[ -n "${GAME_CTIDS[$EXP]:-}" ]]; then
         MASTER_EXPANSION="$EXP"
         break
@@ -1090,11 +1165,7 @@ update_db_conf() {
 
   : ${MASTER_EXPANSION:="$EXPANSION"}
 
-  case "$MASTER_EXPANSION" in
-    classic) MASTER_INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     MASTER_INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   MASTER_INSTALL_DIR="/srv/mangos-wotlk" ;;
-  esac
+  MASTER_INSTALL_DIR=$(expansion_install_dir "$MASTER_EXPANSION") || return 1
 
   if pct exec "$LOGIN_CTID" -- test -f "${MASTER_INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
     pct exec "$LOGIN_CTID" -- bash -c "
@@ -1134,12 +1205,21 @@ update_db_conf() {
     }
 
     pct exec "$GAME_CTID" -- bash -c "
-      sed -i \
-      -e 's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
-      -e 's|^WorldDatabaseInfo *=.*|WorldDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
-      -e 's|^CharacterDatabaseInfo *=.*|CharacterDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
-      -e 's|^LogsDatabaseInfo *=.*|LogsDatabaseInfo      = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
-      ${INSTALL_DIR}/etc/mangosd.conf
+      if [[ '$EXP' == 'vmangos' ]]; then
+        sed -i \
+        -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+        -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+        -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+        -e 's|^LogsDatabase\.Info *=.*|LogsDatabase.Info               = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+        ${INSTALL_DIR}/etc/mangosd.conf
+      else
+        sed -i \
+        -e 's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+        -e 's|^WorldDatabaseInfo *=.*|WorldDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+        -e 's|^CharacterDatabaseInfo *=.*|CharacterDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+        -e 's|^LogsDatabaseInfo *=.*|LogsDatabaseInfo      = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+        ${INSTALL_DIR}/etc/mangosd.conf
+      fi
     "
 
     echo "$EXP mangosd.conf updated."
@@ -1149,7 +1229,7 @@ update_db_conf() {
 service_create() {
   if [[ -z "${EXPANSION:-}" ]]; then
     echo "Select expansion:"
-    select EXP in classic tbc wotlk; do
+    select EXP in classic tbc wotlk vmangos; do
       [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
     done
   fi
@@ -1160,7 +1240,7 @@ service_create() {
     pct exec "$LOGIN_CTID" -- bash -c "
 cat > /etc/systemd/system/realmd.service <<EOF
 [Unit]
-Description=CMaNGOS Realmd
+Description=$(if is_vmangos; then echo 'vMaNGOS'; else echo 'CMaNGOS'; fi) Realmd
 After=network.target
 
 [Service]
@@ -1185,7 +1265,7 @@ EOF
   pct exec "$GAME_CTID" -- bash -c "
 cat > /etc/systemd/system/mangosd.service <<EOF
 [Unit]
-Description=CMaNGOS World Server ($EXPANSION)
+Description=$(if is_vmangos; then echo 'vMaNGOS'; else echo 'CMaNGOS'; fi) World Server ($EXPANSION)
 After=network.target
 
 [Service]
@@ -1208,7 +1288,7 @@ EOF
 fix_realm_entry() {
   if [[ -z "${EXPANSION:-}" ]]; then
     echo "Select expansion:"
-    select EXP in classic tbc wotlk; do
+    select EXP in classic tbc wotlk vmangos; do
       [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
     done
   fi
@@ -1222,16 +1302,16 @@ fix_realm_entry() {
 
     mariadb -u root ${REALM_DB_NAME} -e \"
       DELETE FROM realmlist WHERE id=${REALM_ID};
-      DELETE FROM realmlist WHERE name='SPP-${EXPANSION^}';
+      DELETE FROM realmlist WHERE name='SPP-${EXPANSION_TITLE}';
 
       INSERT INTO realmlist
         (id, name, address, port, icon, realmflags, timezone, allowedSecurityLevel)
       VALUES
-        (${REALM_ID}, 'SPP-${EXPANSION^}', '${LOGIN_IP}', 8085, 1, 0, 1, 0);
+        (${REALM_ID}, 'SPP-${EXPANSION_TITLE}', '${LOGIN_IP}', 8085, 1, 0, 1, 0);
     \"
   "
 
-  echo "Realm entry updated for ${EXPANSION^} (ID: ${REALM_ID}) in ${REALM_DB_NAME}."
+  echo "Realm entry updated for ${EXPANSION_TITLE} (ID: ${REALM_ID}) in ${REALM_DB_NAME}."
 }
 
 fix_mariadb_bind() {
@@ -1255,17 +1335,10 @@ deploy_spp_configs() {
 
 if [[ -z "${EXPANSION:-}" ]]; then
   echo "Select expansion:"
-  select EXP in classic tbc wotlk; do
+  select EXP in classic tbc wotlk vmangos; do
     [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
   done
 fi
-
-case "$EXPANSION" in
-  classic) INSTALL_DIR="/srv/mangos-classic" ;;
-  tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-  wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-esac
-
 derive_db_names || return 1
 
 pct exec "$GAME_CTID" -- bash -c "
@@ -1274,21 +1347,16 @@ cd /opt
 rm -rf spp-settings
 git clone --depth 1 --filter=blob:none --sparse https://github.com/japtenks/spp-cmangos-prox.git spp-settings
 cd spp-settings
-git sparse-checkout set Settings/${MAP_KEY}
+git sparse-checkout set Settings/${SETTINGS_KEY}
 
-CONF_DIR=\"Settings/${MAP_KEY}\"
+CONF_DIR=\"Settings/${SETTINGS_KEY}\"
 cp -f \$CONF_DIR/*.conf $INSTALL_DIR/etc/
 "
-deploy_spp_configs
 }
 deploy_realmd() {
   deploy_spp_configs || return 1
 
-  case "$EXPANSION" in
-    classic) INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-  esac
+  INSTALL_DIR=$(expansion_install_dir "$EXPANSION") || return 1
 
   # Only deploy realmd binary if we are the master expansion
   if ! is_master; then
@@ -1321,6 +1389,11 @@ deploy_realmd() {
       echo 'realmd.conf already exists, skipping.'
     fi
   "
+
+  if pct exec "$GAME_CTID" -- test -f "/opt/spp-settings/Settings/${SETTINGS_KEY}/realmd.conf" 2>/dev/null; then
+    pct exec "$GAME_CTID" -- tar -C "/opt/spp-settings/Settings/${SETTINGS_KEY}" -cf - realmd.conf | \
+    pct exec "$LOGIN_CTID" -- tar -C "$INSTALL_DIR/etc" -xf -
+  fi
 }
 
 shared_website_menu() {
@@ -1365,6 +1438,13 @@ update_config_protected() {
 install_website() {
   derive_db_names || return 1
 
+  if is_vmangos; then
+    echo "Website install is not implemented for vMaNGOS in this launcher yet."
+    echo "Skipping website deployment."
+    read -p "Press Enter to continue..."
+    return 0
+  fi
+
   if ! is_master; then
     echo "Website is pinned to master expansion: ${MASTER_EXPANSION}."
     echo "To change the active world shown on the website, use 'Website' -> 'Switch Active World'."
@@ -1407,6 +1487,10 @@ install_website() {
 
 install_website_db() {
   derive_db_names || return 1
+
+  if is_vmangos; then
+    return 0
+  fi
 
   if is_master; then
     echo "Installing website tables into ${REALM_DB_NAME}..."
@@ -1636,11 +1720,6 @@ config_menu() {
     read -p "Selection: " CSEL
     case "$CSEL" in
       1)
-        case "$EXPANSION" in
-          classic) INSTALL_DIR="/srv/mangos-classic" ;;
-          tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-          wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-        esac
         derive_db_names || return 1
         check_and_update_botconf
         read -p "Press Enter to continue..."
@@ -1732,12 +1811,59 @@ configure_modules() {
 }
 
 comp_server() {
+  derive_db_names || return 1
+  local REPO BRANCH
+  REPO=$(expansion_repo "$EXPANSION") || return 1
+  BRANCH=$(expansion_branch "$EXPANSION") || return 1
 
-  case "$EXPANSION" in
-    classic) REPO="https://github.com/japtenks/mangos-classic.git"; INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     REPO="https://github.com/celguar/mangos-tbc.git";     INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   REPO="https://github.com/celguar/mangos-wotlk.git";   INSTALL_DIR="/srv/mangos-wotlk" ;;
-  esac
+  if is_vmangos; then
+    pct exec "$GAME_CTID" -- bash -c "
+      set -e
+      cd /opt
+
+      if [[ -d source ]]; then
+        echo 'Updating existing vMaNGOS core...'
+        cd source
+        git fetch origin
+        git checkout '$BRANCH'
+        git pull --ff-only origin '$BRANCH'
+      else
+        echo 'Cloning fresh vMaNGOS core...'
+        git clone '$REPO' source
+        cd source
+        git checkout '$BRANCH'
+      fi
+    "
+
+    pct exec "$GAME_CTID" -- bash -c "
+      set -e
+      cd /opt/source
+      rm -rf build
+      mkdir -p build
+      cd build
+      cmake .. \
+        -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_EXTRACTORS=ON \
+        -DBUILD_PLAYERBOTS=ON \
+        -DSUPPORTED_CLIENT_BUILD=5875
+      make -j\$(nproc)
+      make install
+      mkdir -p /var/log/mangos/
+      cd '$INSTALL_DIR/etc' || exit 1
+
+      for f in *.conf.dist; do
+        base=\${f%.dist}
+        [[ -f \$base ]] && continue
+        cp \$f \$base
+      done
+    "
+
+    update_core_metadata
+    update_db_conf
+    check_and_update_botconf
+    return 0
+  fi
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -1747,7 +1873,7 @@ comp_server() {
       echo 'Updating existing core...'
       cd source
       git fetch
-      git checkout ike3-bots
+      git checkout '$BRANCH'
       git pull
       cd src/modules/playerbot
       git fetch
@@ -1755,9 +1881,9 @@ comp_server() {
       git reset --hard origin/master
     else
       echo 'Cloning fresh core...'
-      git clone $REPO source
+      git clone '$REPO' source
       cd source
-      git checkout ike3-bots
+      git checkout '$BRANCH'
       sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
       mkdir -p src/modules
       cd src/modules
@@ -1849,12 +1975,51 @@ comp_server() {
 }
 
 update_core() {
+  derive_db_names || return 1
 
-  case "$EXPANSION" in
-    classic) INSTALL_DIR="/srv/mangos-classic" ;;
-    tbc)     INSTALL_DIR="/srv/mangos-tbc" ;;
-    wotlk)   INSTALL_DIR="/srv/mangos-wotlk" ;;
-  esac
+  if is_vmangos; then
+    local OLD_CORE
+    OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD 2>/dev/null || echo "")
+
+    pct exec "$GAME_CTID" -- bash -c "
+      set -e
+      cd /opt/source
+      git fetch origin
+      git checkout '$(expansion_branch "$EXPANSION")'
+      git pull --ff-only origin '$(expansion_branch "$EXPANSION")'
+    "
+
+    local NEW_CORE
+    NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
+
+    if [[ "$OLD_CORE" != "$NEW_CORE" ]]; then
+      echo "Changes detected â€” rebuilding..."
+      stop_mangosd_managed "core-rebuild"
+
+      pct exec "$GAME_CTID" -- bash -c "
+        set -e
+        rm -rf /opt/source/build
+        mkdir -p /opt/source/build
+        cd /opt/source/build
+        cmake .. \
+          -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DBUILD_EXTRACTORS=ON \
+          -DBUILD_PLAYERBOTS=ON \
+          -DSUPPORTED_CLIENT_BUILD=5875
+        make -j\$(nproc)
+        make install
+      "
+
+      start_mangosd_managed "core-rebuild"
+    else
+      echo "No core changes â€” skipping rebuild."
+    fi
+
+    update_core_metadata
+    check_and_update_botconf
+    return 0
+  fi
 
   local OLD_CORE OLD_BOT
   OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
@@ -1945,8 +2110,13 @@ update_core() {
 update_core_metadata() {
 CORE_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --abbrev-ref HEAD)
 CORE_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse --short HEAD)
+if is_vmangos; then
+BOT_BRANCH="integrated-playerbots"
+BOT_COMMIT="$CORE_COMMIT"
+else
 BOT_BRANCH=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --abbrev-ref HEAD)
 BOT_COMMIT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse --short HEAD)
+fi
 BUILD_DATE=$(date +%F_%H:%M)
 
 KEY=$(echo "$EXPANSION" | tr '[:lower:]' '[:upper:]')
@@ -1973,6 +2143,10 @@ check_and_update_botconf() {
     wotlk)
       INSTALL_DIR="/srv/mangos-wotlk"
       MAP_KEY="wotlk"
+      ;;
+    vmangos)
+      INSTALL_DIR="/srv/vmangos"
+      MAP_KEY="vmangos"
       ;;
     *)
       echo "WARNING: Unknown expansion '$EXPANSION' for botconf deploy. Skipping."
@@ -2159,9 +2333,14 @@ database_menu() {
 install_db() {
   derive_db_names || return 1
   echo "Installing full DB (including realm)..."
+  if is_vmangos; then
+    create_lan_db_user
+  fi
   install_world
   install_char
-  install_armory
+  if ! is_vmangos; then
+    install_armory
+  fi
   install_logs
   install_realm
   create_lan_db_user
@@ -2172,9 +2351,14 @@ install_db() {
 install_db_no_realm() {
   derive_db_names || return 1
   echo "Installing expansion DB (world/chars/logs only)..."
+  if is_vmangos; then
+    create_lan_db_user
+  fi
   install_world
   install_char
-  install_armory
+  if ! is_vmangos; then
+    install_armory
+  fi
   install_logs
   # Grant LAN user access to new DBs - realm DB already exists from master
   create_lan_db_user
@@ -2185,6 +2369,53 @@ install_db_no_realm() {
 install_world() {
   derive_db_names || return 1
   echo "Installing world DB..."
+
+  if is_vmangos; then
+    local DB_IP
+    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+
+    if pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      export MYSQL_PWD='${DB_LAN_PASS}'
+      ASSET_BASE='/opt/spp-assets/vmangos/sql'
+      TMP_DIR='/tmp/vmangos-sql'
+      mkdir -p \"\$TMP_DIR\"
+
+      WORLD_SQL=''
+      if [[ -f \"\$ASSET_BASE/world.sql\" ]]; then
+        WORLD_SQL=\"\$ASSET_BASE/world.sql\"
+      elif [[ -f \"\$ASSET_BASE/world.7z\" ]]; then
+        rm -f \"\$TMP_DIR/world.sql\"
+        7z x -y \"\$ASSET_BASE/world.7z\" -o\"\$TMP_DIR\" >/dev/null
+        WORLD_SQL=\"\$TMP_DIR/world.sql\"
+      else
+        echo 'Missing /opt/spp-assets/vmangos/sql/world.sql or world.7z'
+        exit 1
+      fi
+
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+        DROP DATABASE IF EXISTS ${WORLD_DB};
+        CREATE DATABASE ${WORLD_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      \"
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$WORLD_SQL\"
+
+      for f in \"\$ASSET_BASE/world\"/*.sql; do
+        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"
+      done
+    "; then
+      echo "DB installed successfully."
+    else
+      echo "DB install FAILED."
+      return 1
+    fi
+
+    WORLD_EXPECTED="${VERSION_MAP[$EXPANSION:WORLD]}"
+    INSTALL_DATE=$(date +%F_%H:%M)
+    write_version "${EXPANSION}_world_version.spp" "${WORLD_EXPECTED}|${INSTALL_DATE}"
+    read -p "Press Enter to return..." _
+    return 0
+  fi
+
  if pct exec "$DB_CTID" -- bash -c "
 
   export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -2265,7 +2496,41 @@ install_realm() {
 install_char() {
   derive_db_names || return 1
 
-    echo "Installing world DB..."
+    echo "Installing character DB..."
+ if is_vmangos; then
+  local DB_IP
+  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+
+  if pct exec "$GAME_CTID" -- bash -c "
+    set -euo pipefail
+    export MYSQL_PWD='${DB_LAN_PASS}'
+    SQL_BASE='/opt/source/sql'
+
+    mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+      DROP DATABASE IF EXISTS ${CHAR_DB_NAME};
+      CREATE DATABASE ${CHAR_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    \"
+
+    mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$SQL_BASE/characters.sql\"
+
+    for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_characters.sql' | sort); do
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
+    done
+
+    for f in /opt/spp-assets/vmangos/sql/characters/*.sql; do
+      [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
+    done
+  "; then
+    echo "DB installed successfully."
+  else
+    echo "DB install FAILED."
+    return 1
+  fi
+  write_version "${EXPANSION}_chars_version.spp" "${VERSION_MAP[$EXPANSION:CHARS]}"
+  read -p "Press Enter to return..." _
+  return 0
+ fi
+
  if pct exec "$DB_CTID" -- bash -c "
  
   export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -2310,6 +2575,37 @@ install_char() {
 install_logs() {
   derive_db_names || return 1
   echo "Installing logs DB..."
+
+  if is_vmangos; then
+    local DB_IP
+    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+
+    if pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      export MYSQL_PWD='${DB_LAN_PASS}'
+      SQL_BASE='/opt/source/sql'
+
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+        DROP DATABASE IF EXISTS ${LOG_DB_NAME};
+        CREATE DATABASE ${LOG_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      \"
+
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$SQL_BASE/logs.sql\"
+
+      for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logs.sql' | sort); do
+        mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$f\"
+      done
+    "; then
+      echo "Logs DB installed successfully."
+    else
+      echo "Logs DB install FAILED."
+      return 1
+    fi
+
+    write_version "${EXPANSION}_logs_version.spp" "${VERSION_MAP[$EXPANSION:LOGS]}"
+    read -p "Press Enter to return..." _
+    return 0
+  fi
 
   if pct exec "$DB_CTID" -- bash -c "
     export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -2815,6 +3111,42 @@ install_realm() {
   pin_master_expansion
   echo "Installing realm DB..."
 
+  if is_vmangos; then
+    local DB_IP
+    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+
+    if pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      export MYSQL_PWD='${DB_LAN_PASS}'
+      SQL_BASE='/opt/source/sql'
+
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+        DROP DATABASE IF EXISTS ${REALM_DB_NAME};
+        CREATE DATABASE ${REALM_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      \"
+
+      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$SQL_BASE/logon.sql\"
+
+      for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logon.sql' | sort); do
+        mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
+      done
+
+      for f in /opt/spp-assets/vmangos/sql/logon/*.sql; do
+        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
+      done
+    "; then
+      echo "Realm DB installed successfully."
+    else
+      echo "Realm DB install FAILED."
+      return 1
+    fi
+
+    configure_bot_rotation_log || return 1
+    write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
+    read -p "Press Enter to return..." _
+    return 0
+  fi
+
   if pct exec "$DB_CTID" -- bash -c "
     export MYSQL_PWD='${DB_ROOT_PASS}'
     BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
@@ -2960,6 +3292,11 @@ update_db_type() {
 
   local TYPE="$1"
 
+  if is_vmangos; then
+    echo "Incremental DB update automation is not implemented for vmangos yet."
+    return 0
+  fi
+
   local BASE="/opt/spp-sql/sql/${EXPANSION}/updates/${TYPE}"
   local VERSION_FILE="/opt/${EXPANSION}_${TYPE}_version.spp"
 
@@ -3001,6 +3338,24 @@ update_db_type() {
 
 install_data() {
   derive_db_names || return 1
+
+  if is_vmangos; then
+    local ASSET_DIR="/opt/spp-assets/vmangos/data"
+
+    pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      test -d '$ASSET_DIR'
+      mkdir -p '$INSTALL_DIR/data'
+      rsync -a --delete '$ASSET_DIR/' '$INSTALL_DIR/data/'
+    "
+
+    local MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"
+    local INSTALL_DATE
+    INSTALL_DATE=$(date +%F_%H:%M)
+    write_version "${EXPANSION}_maps_version.spp" "${MAP_EXPECTED}|${INSTALL_DATE}"
+    return 0
+  fi
+
   local URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/${MAP_KEY}.7z"
   local IDIR="/srv/mangos-${EXPANSION}"
 
@@ -3106,6 +3461,7 @@ full_install() {
 }
 
 sync_settings_repo() {
+  derive_db_names || return 1
   pct exec "$GAME_CTID" -- bash -c "
     set -e
     cd /opt
@@ -3113,7 +3469,7 @@ sync_settings_repo() {
     git clone --depth 1 --filter=blob:none --sparse \
       https://github.com/japtenks/spp-cmangos-prox.git spp-settings
     cd spp-settings
-    git sparse-checkout set Settings/${MAP_KEY}
+    git sparse-checkout set Settings/${SETTINGS_KEY}
   "
 }
 
@@ -3281,21 +3637,25 @@ server_info_menu() {
   done
 }
 edit_world_settings() {
-  pct exec "$GAME_CTID" -- nano /srv/mangos-$EXPANSION/etc/mangosd.conf
+  derive_db_names || return 1
+  pct exec "$GAME_CTID" -- nano "$INSTALL_DIR/etc/mangosd.conf"
 }
 edit_bot_settings() {
-  pct exec "$GAME_CTID" -- nano /srv/mangos-$EXPANSION/etc/aiplayerbot.conf
+  derive_db_names || return 1
+  pct exec "$GAME_CTID" -- nano "$INSTALL_DIR/etc/aiplayerbot.conf"
   echo
   echo "Syncing bot rotation config..."
   sync_bot_rotation_config
   read -p "Press Enter..." _
 }
 edit_realmd_settings() {
-  pct exec "$LOGIN_CTID" -- nano /srv/mangos-$EXPANSION/etc/realmd.conf
+  derive_db_names || return 1
+  pct exec "$LOGIN_CTID" -- nano "$INSTALL_DIR/etc/realmd.conf"
 }
 edit_other_settings() {
-  local GAME_ETC="/srv/mangos-$EXPANSION/etc"
-  local LOGIN_ETC="/srv/mangos-$EXPANSION/etc"
+  derive_db_names || return 1
+  local GAME_ETC="$INSTALL_DIR/etc"
+  local LOGIN_ETC="$INSTALL_DIR/etc"
   local -a LABELS=()
   local -a TARGETS=()
   local -a PATHS=()
@@ -3349,12 +3709,13 @@ edit_other_settings() {
   done
 }
 change_server_address() {
+  derive_db_names || return 1
   read -p "Enter new public IP: " NEWIP
 
   pct exec "$DB_CTID" -- bash -c "
     export MYSQL_PWD='${DB_ROOT_PASS}'
     mariadb -u root ${REALM_DB_NAME} -e \"
-      UPDATE realmlist SET address='${NEWIP}' WHERE id=1;
+      UPDATE realmlist SET address='${NEWIP}' WHERE id=${REALM_ID};
     \"
   "
 
@@ -3362,12 +3723,13 @@ change_server_address() {
   read -p "Press Enter..."
 }
 change_realm_name() {
+  derive_db_names || return 1
   read -p "Enter new realm name: " NEWNAME
 
   pct exec "$DB_CTID" -- bash -c "
     export MYSQL_PWD='${DB_ROOT_PASS}'
     mariadb -u root ${REALM_DB_NAME} -e \"
-      UPDATE realmlist SET name='${NEWNAME}' WHERE id=1;
+      UPDATE realmlist SET name='${NEWNAME}' WHERE id=${REALM_ID};
     \"
   "
 
