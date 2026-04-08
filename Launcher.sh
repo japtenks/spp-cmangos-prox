@@ -1183,7 +1183,7 @@ print_banner() {
   echo "########################################"
   echo -e "$LOGO"
   echo "Launcher Git: ${BANNER_BRANCH}@${BANNER_COMMIT}"
-  echo "SPP-Web Git: ${WEBSITE_BRANCH}@${WEBSITE_COMMIT} (${WEBSITE_DATE})"
+  echo "SPP-Web Git: ${WEBSITE_GIT_BRANCH}@${WEBSITE_GIT_COMMIT} (${WEBSITE_GIT_DATE})"
   echo -e "$CLEAR"
 }
 
@@ -1798,7 +1798,6 @@ shared_website_menu() {
   echo
   echo "Website (Shared Classic/TBC/WotLK Admin)"
   echo "Use the website as the primary admin surface for shared realmlist changes."
-  echo "Tracked SPP-Web: ${WEBSITE_GIT_BRANCH}@${WEBSITE_GIT_COMMIT} (${WEBSITE_GIT_DATE})"
   echo
   echo "1 - Install Website"
   echo "2 - Update Website"
