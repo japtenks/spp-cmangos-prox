@@ -2386,6 +2386,18 @@ normalize_vmangos_playerbots_case() {
   "
 }
 
+patch_vmangos_mariadb_compat() {
+  is_vmangos || return 0
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    target='/opt/source/src/shared/Database/DatabaseMysql.h'
+    if [[ -f \"\$target\" ]]; then
+      perl -0pi -e 's/#if MYSQL_VERSION_ID >= 80000/#if MYSQL_VERSION_ID >= 80000 \\&\\& !defined(MARIADB_BASE_VERSION) \\&\\& !defined(MARIADB_VERSION_ID)/' \"\$target\"
+    fi
+  "
+}
+
 test_build_vmangos() {
   is_vmangos || return 1
   derive_db_names || return 1
@@ -2414,6 +2426,7 @@ test_build_vmangos() {
   "
 
   normalize_vmangos_playerbots_case
+  patch_vmangos_mariadb_compat
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -2458,6 +2471,7 @@ comp_server() {
     "
 
     normalize_vmangos_playerbots_case
+    patch_vmangos_mariadb_compat
 
     pct exec "$GAME_CTID" -- bash -c "
       set -e
@@ -2616,6 +2630,7 @@ update_core() {
     "
 
     normalize_vmangos_playerbots_case
+    patch_vmangos_mariadb_compat
 
     local NEW_CORE
     NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
