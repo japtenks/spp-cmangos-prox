@@ -1299,8 +1299,7 @@ expansion_menu() {
       echo
     done
 
-    [[ -n "${EXPANSION:-}" ]] && echo "S - Shared Services"
-    echo "M - Service Menu"
+    echo "M - Shared Services"
     echo "0 - Exit"
     echo
 
@@ -1309,13 +1308,8 @@ expansion_menu() {
 
     [[ "$SEL" == "0" ]] && exit 0
 
-    if [[ "$SEL" =~ ^[Ss]$ ]]; then
-      shared_services_menu
-      continue
-    fi
-
     if [[ "$SEL" =~ ^[Mm]$ ]]; then
-      service_menu
+      shared_services_menu
       continue
     fi
 
@@ -1342,6 +1336,7 @@ shared_services_menu() {
     echo "3 - Website"
     echo "4 - Repo"
     echo "5 - Configuration"
+    echo "6 - Update Launcher"
     echo
     echo "0 - Back"
     echo
@@ -1354,6 +1349,7 @@ shared_services_menu() {
       3) shared_website_menu ;;
       4) shared_repo_menu ;;
       5) shared_config_menu ;;
+      6) update_launcher_self ;;
       0) break ;;
     esac
   done
@@ -2061,7 +2057,6 @@ service_menu() {
     echo
     echo "6 - Autostart Status: ($ASV)"
 	echo "7 - Server Info"
-    echo "8 - Update Launcher"
     echo "0 - Back to Launcher"
     echo
 
@@ -2075,7 +2070,6 @@ service_menu() {
       5) ensure_service_target_context && live_logs ;;
       6) ensure_service_target_context && toggle_autostart ;;
 	  7) ensure_service_target_context && server_info_menu ;;
-      8) update_launcher_self ;;
       0) return ;;
     esac
   done
