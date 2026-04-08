@@ -1306,6 +1306,21 @@ ensure_service_target_context() {
   ensure_game_container || return 1
 }
 
+require_existing_game_container() {
+  ensure_expansion_context || return 1
+  auto_detect_stack
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+
+  if [[ -n "$GAME_CTID" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "Game container spp-$EXPANSION is not installed."
+  echo "Open Stack Control when you are ready to create or attach that container."
+  return 1
+}
+
 #menus and functions
 
 main() {
@@ -2106,7 +2121,7 @@ service_menu() {
 
     case "$MAIN" in
       1) ensure_service_target_context && stack_control_menu ;;
-      2) ensure_service_target_context && maintenance_menu ;;
+      2) ensure_expansion_context && maintenance_menu ;;
       3) expansion_menu ;;
       4) ensure_service_target_context && connect_ra ;;
       5) ensure_service_target_context && live_logs ;;
@@ -2199,15 +2214,15 @@ maintenance_menu() {
     case "$MSEL" in
       1) core_menu ;;
       2) database_menu ;;
-      3) install_data ;;
+      3) require_existing_game_container && install_data ;;
 	  4) config_menu ;;
       I)
         read -p "Type YES to continue: " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && full_install
+        [[ "$CONFIRM" == "YES" ]] && require_existing_game_container && full_install
         ;;
 	  S) 	 
         read -p "Type YES to continue: " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && sync_settings_repo ;;
+        [[ "$CONFIRM" == "YES" ]] && require_existing_game_container && sync_settings_repo ;;
       0) return ;;
     esac
   done
@@ -2224,6 +2239,7 @@ config_menu() {
     read -p "Selection: " CSEL
     case "$CSEL" in
       1)
+        require_existing_game_container || continue
         derive_db_names || return 1
         check_and_update_botconf
         read -p "Press Enter to continue..."
@@ -2251,6 +2267,7 @@ core_menu() {
       1)
         read -p "Confirm rebuild? (Y/N): " CONFIRM
         if [[ "${CONFIRM^^}" == "Y" ]]; then
+          require_existing_game_container || continue
           pct exec "$GAME_CTID" -- rm -rf /opt/source
           comp_server
           echo
@@ -2260,6 +2277,7 @@ core_menu() {
       2)
         read -p "Confirm update? (YES): " CONFIRM
         if [[ "$CONFIRM" == "YES" ]]; then
+          require_existing_game_container || continue
           update_core
           echo
           read -p "Core update finished. Press Enter to continue..." _
@@ -2807,27 +2825,27 @@ database_menu() {
     case "$DBSEL" in
       1)
         read -p "Confirm reinstall? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && install_db
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && install_db
         ;;
       2)
         read -p "Confirm reset? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && reset_characters
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && reset_characters
         ;;
       3)         
 	    read -p "Confirm install? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && install_locales ;;
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && install_locales ;;
 	  4)         
 	    read -p "Confirm update on realmd? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && update_db_type realmd ;;
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && update_db_type realmd ;;
 	  5)         
 	    read -p "Confirm update on characters? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && update_db_type characters ;;
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && update_db_type characters ;;
 	  6)         
 	    read -p "Confirm update on PlayerBots? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && update_db_type playerbot ;;
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && update_db_type playerbot ;;
       7)
         read -p "Configure bot rotation logging now? (Y/N): " CONFIRM
-        [[ "$CONFIRM" == "Y" ]] && configure_bot_rotation_log
+        [[ "$CONFIRM" == "Y" ]] && { ! is_vmangos || require_existing_game_container; } && configure_bot_rotation_log
         ;;
       0) return ;;
     esac
