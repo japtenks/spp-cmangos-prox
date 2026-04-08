@@ -65,6 +65,13 @@ index f99ee3f23..dcfc9c430 100644
      MaNGOS::CreatureLastSearcher<MaNGOS::NearestCreatureEntryWithLiveStateInObjectRangeCheck> searcher(creature, creature_check);
      Cell::VisitGridObjects(bot, searcher, 1000.0f);
  
+@@ -3724,4 +3724,4 @@ bool DebugAction::HandleSound(Event& event, Player* requester, const std::string
+     uint32 soundEffect = stoi(text.substr(6));
+     bot->PlayDistanceSound(soundEffect);
+     return true;
+-}
+\ No newline at end of file
++}
 diff --git a/src/game/PlayerBots/playerbot/strategy/actions/GoAction.cpp b/src/game/PlayerBots/playerbot/strategy/actions/GoAction.cpp
 index afeb115d9..3d93a23f3 100644
 --- a/src/game/PlayerBots/playerbot/strategy/actions/GoAction.cpp
@@ -119,6 +126,13 @@ index 05e44a22f..c80a867ab 100644
  }
  
  bool LootRollAction::Execute(Event& event)
+@@ -310,4 +291,4 @@ bool AutoLootRollAction::Execute(Event& event)
+ bool AutoLootRollAction::isPossible()
+ {
+     return bot->GetGroup() && !AI_VALUE(LootRollMap, "active rolls").empty() && AI_VALUE(uint8, "bag space") < 100;
+-}
+\ No newline at end of file
++}
 diff --git a/src/game/PlayerBots/playerbot/strategy/actions/MovementActions.cpp b/src/game/PlayerBots/playerbot/strategy/actions/MovementActions.cpp
 index 1d578bcbd..2f43859a3 100644
 --- a/src/game/PlayerBots/playerbot/strategy/actions/MovementActions.cpp
@@ -169,11 +183,18 @@ index 18ddc9724..2c9cd3d8e 100644
          && (bot->GetPlayerbotAI()->GetChatHelper()->ExtractAllItemIds(msg).size() > 0 || bot->GetPlayerbotAI()->GetChatHelper()->ExtractAllQuestIds(msg).size() > 0))
      {
          HandleToxicLinksReply(bot, chatChannelSource, msg, name);
+@@ -1559,4 +1559,4 @@ bool SpeakAction::Execute(Event& event)
+         ai->Say(text, botsTalkLikePlayers);
+ 
+     return true;
+-}
+\ No newline at end of file
++}
 diff --git a/src/game/PlayerBots/playerbot/strategy/values/LootValues.cpp b/src/game/PlayerBots/playerbot/strategy/values/LootValues.cpp
 index b866d7149..2a4d2dabf 100644
 --- a/src/game/PlayerBots/playerbot/strategy/values/LootValues.cpp
 +++ b/src/game/PlayerBots/playerbot/strategy/values/LootValues.cpp
-@@ -399,17 +399,9 @@ void ActiveRolls::CleanUp(Player* bot, LootRollMap& rollMap, ObjectGuid guid, ui
+@@ -399,17 +399,14 @@ void ActiveRolls::CleanUp(Player* bot, LootRollMap& rollMap, ObjectGuid guid, ui
  			continue;
  		}
  
@@ -188,13 +209,17 @@ index b866d7149..2a4d2dabf 100644
 -		{
 -			roll = rollMap.erase(roll);
 -			continue;
--		}
 +        // vMaNGOS does not expose GroupLootRoll, so stale roll state cannot be resolved here.
 +        roll = rollMap.erase(roll);
 +        continue;
++
++        if(guid)
++        {
++            roll = rollMap.erase(roll);
++            continue;
+ 		}
  
  		++roll;
- 	}
 diff --git a/src/mangosd/CMakeLists.txt b/src/mangosd/CMakeLists.txt
 index 94285fa36..ca8debe16 100644
 --- a/src/mangosd/CMakeLists.txt
@@ -229,6 +254,11 @@ index 60061e65a..8ff8d5e42 100644
    )
  endif()
  
+@@ -403,4 +403,3 @@ else()
+           )
+   endif()
+ endif()
+-
 diff --git a/src/shared/Progression.h b/src/shared/Progression.h
 index f9a08bce2..a92c9e08a 100644
 --- a/src/shared/Progression.h
