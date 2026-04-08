@@ -2,11 +2,12 @@
 set -euo pipefail
 trap 'echo "ERROR at line $LINENO: $BASH_COMMAND" >&2' ERR
 DRY_RUN=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # -------------------------
 # First Run Bootstrap
 # -------------------------
-CONFIG_FILE="./config.env"
+CONFIG_FILE="${SCRIPT_DIR}/config.env"
 declare -A GAME_CTIDS
 WEBSITE_REPO="https://github.com/japtenks/SPP-Web.git"
 WEBSITE_SRC_DIR="/opt/SPP-Web"
@@ -15,6 +16,45 @@ php_single_quote_escape() {
   local value="${1//\\/\\\\}"
   value="${value//\'/\\\'}"
   printf '%s' "$value"
+}
+
+set_or_append_config_line() {
+  local key="$1"
+  local value="$2"
+
+  if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$CONFIG_FILE"
+  fi
+}
+
+append_config_default_line() {
+  local key="$1"
+  local value="$2"
+
+  if ! grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    printf '%s=%s\n' "$key" "$value" >> "$CONFIG_FILE"
+  fi
+}
+
+normalize_config_env() {
+  [[ -f "$CONFIG_FILE" ]] || return 0
+
+  # Canonical install-path ordering is owned by the launcher and must survive old configs.
+  set_or_append_config_line "ALLOWED_EXPANSIONS" '("classic" "tbc" "wotlk" "vmangos")'
+
+  append_config_default_line "IP_VMANGOS" '""'
+  append_config_default_line "VMANGOS_CORE_VERSION" '1'
+  append_config_default_line "VMANGOS_WORLD_VERSION" '1'
+  append_config_default_line "VMANGOS_CHARS_VERSION" '1'
+  append_config_default_line "VMANGOS_REALM_VERSION" '1'
+  append_config_default_line "VMANGOS_LOGS_VERSION" '1'
+  append_config_default_line "VMANGOS_BOTS_VERSION" '1'
+  append_config_default_line "VMANGOS_WEBSITE_VERSION" '0'
+  append_config_default_line "VMANGOS_MAPS_VERSION" '1'
+  append_config_default_line "MASTER_EXPANSION" '""'
+  append_config_default_line "MASTER_REALMD_DB" '""'
 }
 
 auto_detect_stack() {
@@ -221,7 +261,11 @@ EOF
   echo "config.env created."
 fi
 
+normalize_config_env
 source "$CONFIG_FILE"
+
+# Keep install-path ordering canonical even if an older config.env exists.
+ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 
 DB_CTID="${DB_CTID:-}"
 WEB_CTID="${WEB_CTID:-}"
