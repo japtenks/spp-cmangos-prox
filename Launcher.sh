@@ -202,6 +202,7 @@ VMANGOS_BOTS_VERSION=1
 VMANGOS_WEBSITE_VERSION=0
 VMANGOS_MAPS_VERSION=1
 MASTER_EXPANSION=""
+MASTER_REALMD_DB=""
 
 # Module build toggles (ON/OFF) — edit via Launcher "Configure Modules" or directly
 MODULE_ACHIEVEMENTS=ON
@@ -600,23 +601,74 @@ derive_db_names() {
   INSTALL_DIR=$(expansion_install_dir "$EXPANSION") || return 1
   EXPANSION_TITLE=$(expansion_title "$EXPANSION")
 
-  # Realm DB always belongs to master expansion
-  # Falls back to current expansion if master not yet set (first install)
-  local MASTER="${MASTER_EXPANSION:-$EXPANSION}"
-  REALM_DB_NAME=$(expansion_realm_db_name "$MASTER") || {
-    echo "Unknown master expansion: $MASTER"
-    return 1
-  }
+  if [[ -n "${MASTER_REALMD_DB:-}" ]]; then
+    REALM_DB_NAME="$MASTER_REALMD_DB"
+  elif [[ -n "${MASTER_EXPANSION:-}" ]]; then
+    REALM_DB_NAME=$(expansion_realm_db_name "$MASTER_EXPANSION") || {
+      echo "Unknown master expansion: $MASTER_EXPANSION"
+      return 1
+    }
+  else
+    REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
+  fi
   REALM_ID=$(expansion_realm_id "$EXPANSION") || return 1
+}
+
+set_config_value() {
+  local KEY=$1
+  local VALUE=$2
+  if grep -q "^${KEY}=" "$CONFIG_FILE"; then
+    sed -i "s|^${KEY}=.*|${KEY}=\"${VALUE}\"|" "$CONFIG_FILE"
+  else
+    printf '%s="%s"\n' "$KEY" "$VALUE" >> "$CONFIG_FILE"
+  fi
 }
 
 pin_master_expansion() {
   if [[ -z "${MASTER_EXPANSION:-}" ]]; then
     MASTER_EXPANSION="$EXPANSION"
-    sed -i "s/^MASTER_EXPANSION=.*/MASTER_EXPANSION=\"$MASTER_EXPANSION\"/" "$CONFIG_FILE"
+    set_config_value "MASTER_EXPANSION" "$MASTER_EXPANSION"
     echo "Pinned master expansion: $MASTER_EXPANSION"
   else
     echo "Master expansion already pinned: $MASTER_EXPANSION"
+  fi
+}
+
+pin_master_realmd_db() {
+  if [[ -z "${MASTER_REALMD_DB:-}" ]]; then
+    MASTER_REALMD_DB=$(expansion_realm_db_name "$EXPANSION") || return 1
+    set_config_value "MASTER_REALMD_DB" "$MASTER_REALMD_DB"
+    echo "Pinned master realmd DB: $MASTER_REALMD_DB"
+  else
+    echo "Master realmd DB already pinned: $MASTER_REALMD_DB"
+  fi
+}
+
+sync_realmd_db_version_markers() {
+  derive_db_names || return 1
+
+  if is_vmangos; then
+    echo "Skipping realmd_db_version sync for vMaNGOS."
+    return 0
+  fi
+
+  local SHARED_REALMD_DB="${MASTER_REALMD_DB:-$REALM_DB_NAME}"
+  if [[ "$REALM_DB_NAME" != "$SHARED_REALMD_DB" ]]; then
+    echo "Keeping dedicated realmd_db_version markers in ${REALM_DB_NAME}."
+    return 0
+  fi
+
+  local SINGLE_REALMD_SQL="/opt/spp-sql/sql/${MAP_KEY}/updates/realmd/5/single_realmd.sql"
+  if pct exec "$DB_CTID" -- bash -c "
+    set -euo pipefail
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    test -f '${SINGLE_REALMD_SQL}'
+    mariadb -u root '${REALM_DB_NAME}' < '${SINGLE_REALMD_SQL}'
+  "; then
+    echo "Applied shared realmd_db_version markers to ${REALM_DB_NAME}."
+  else
+    echo "Failed applying shared realmd_db_version markers to ${REALM_DB_NAME}."
+    return 1
   fi
 }
 
@@ -1680,7 +1732,10 @@ web_config() {
   local DEFAULT_REALM_ID
   DEFAULT_REALM_ID=$(expansion_realm_id "${MASTER_EXPANSION:-$EXPANSION}")
   local MASTER_REALM_DB
-  MASTER_REALM_DB=$(expansion_realm_db_name "${MASTER_EXPANSION:-$EXPANSION}")
+  MASTER_REALM_DB="${MASTER_REALMD_DB:-}"
+  if [[ -z "$MASTER_REALM_DB" ]]; then
+    MASTER_REALM_DB=$(expansion_realm_db_name "${MASTER_EXPANSION:-$EXPANSION}")
+  fi
   local REALM_MAP_PHP
   REALM_MAP_PHP=$(website_realm_map_php "$MASTER_REALM_DB")
   local ENABLED_REALM_IDS_PHP
@@ -2643,6 +2698,8 @@ install_realm() {
 
   # Pin master on first realm install
   pin_master_expansion
+  pin_master_realmd_db || return 1
+  derive_db_names || return 1
 
   echo "Installing realm DB..."
 
@@ -2672,6 +2729,8 @@ install_realm() {
     echo "Realm DB install FAILED."
     return 1
   fi
+
+  sync_realmd_db_version_markers || return 1
 
   write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
   read -p "Press Enter to return..." _
@@ -3292,6 +3351,8 @@ __BOT_ROTATION_REMOTE__
 install_realm() {
   derive_db_names || return 1
   pin_master_expansion
+  pin_master_realmd_db || return 1
+  derive_db_names || return 1
   echo "Installing realm DB..."
 
   if is_vmangos; then
@@ -3354,6 +3415,7 @@ install_realm() {
     return 1
   fi
 
+  sync_realmd_db_version_markers || return 1
   configure_bot_rotation_log || return 1
 
   write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
