@@ -47,6 +47,9 @@ normalize_config_env() {
   set_or_append_config_line "LAUNCHER_VERSION" "\"${DEFAULT_LAUNCHER_VERSION}\""
   append_config_default_line "LAUNCHER_GIT_BRANCH" '"unknown"'
   append_config_default_line "LAUNCHER_GIT_COMMIT" '"unknown"'
+  append_config_default_line "WEBSITE_GIT_BRANCH" '"unknown"'
+  append_config_default_line "WEBSITE_GIT_COMMIT" '"unknown"'
+  append_config_default_line "WEBSITE_GIT_DATE" '"unknown"'
 
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_CORE_VERSION" '1'
@@ -75,6 +78,26 @@ refresh_launcher_git_tracking() {
 
   LAUNCHER_GIT_BRANCH="$branch"
   LAUNCHER_GIT_COMMIT="$commit"
+}
+
+refresh_website_git_tracking() {
+  local branch="unknown"
+  local commit="unknown"
+  local commit_date="unknown"
+
+  if [[ -n "${WEB_CTID:-}" ]] && pct exec "$WEB_CTID" -- test -d /var/www/html/.git 2>/dev/null; then
+    branch=$(pct exec "$WEB_CTID" -- bash -lc "git -C /var/www/html rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+    commit=$(pct exec "$WEB_CTID" -- bash -lc "git -C /var/www/html rev-parse --short=12 HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+    commit_date=$(pct exec "$WEB_CTID" -- bash -lc "git -C /var/www/html log -1 --date=short --format=%cd 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+  fi
+
+  set_config_value "WEBSITE_GIT_BRANCH" "$branch"
+  set_config_value "WEBSITE_GIT_COMMIT" "$commit"
+  set_config_value "WEBSITE_GIT_DATE" "$commit_date"
+
+  WEBSITE_GIT_BRANCH="$branch"
+  WEBSITE_GIT_COMMIT="$commit"
+  WEBSITE_GIT_DATE="$commit_date"
 }
 
 update_launcher_self() {
@@ -227,6 +250,9 @@ INSTALLED_EXPANSIONS=()
 LAUNCHER_VERSION="$DEFAULT_LAUNCHER_VERSION"
 LAUNCHER_GIT_BRANCH="unknown"
 LAUNCHER_GIT_COMMIT="unknown"
+WEBSITE_GIT_BRANCH="unknown"
+WEBSITE_GIT_COMMIT="unknown"
+WEBSITE_GIT_DATE="unknown"
 AUTO_START="0"
 ASV="Off"
 
@@ -327,7 +353,12 @@ ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
 LAUNCHER_GIT_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
 LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
+WEBSITE_GIT_BRANCH="${WEBSITE_GIT_BRANCH:-unknown}"
+WEBSITE_GIT_COMMIT="${WEBSITE_GIT_COMMIT:-unknown}"
+WEBSITE_GIT_DATE="${WEBSITE_GIT_DATE:-unknown}"
 refresh_launcher_git_tracking
+auto_detect_stack
+refresh_website_git_tracking
 
 DB_CTID="${DB_CTID:-}"
 WEB_CTID="${WEB_CTID:-}"
@@ -1755,9 +1786,12 @@ deploy_realmd() {
 }
 
 shared_website_menu() {
+  auto_detect_stack
+  refresh_website_git_tracking
   echo
   echo "Website (Shared Classic/TBC/WotLK Admin)"
   echo "Use the website as the primary admin surface for shared realmlist changes."
+  echo "Deployed SPP-Web: ${WEBSITE_GIT_BRANCH}@${WEBSITE_GIT_COMMIT} (${WEBSITE_GIT_DATE})"
   echo
   echo "1 - Install Website"
   echo "2 - Update Website"
@@ -1841,6 +1875,7 @@ install_website() {
 
   install_website_db
   web_config
+  refresh_website_git_tracking
 
   local WEB_EXPECTED="${VERSION_MAP[$EXPANSION:WEBSITE]}"
   local INSTALL_DATE
@@ -1924,6 +1959,7 @@ update_website() {
   echo
 
   web_config
+  refresh_website_git_tracking
 }
 web_config() {
   auto_detect_stack
@@ -1971,12 +2007,6 @@ web_config() {
   DB_LAN_USER_PHP=$(php_single_quote_escape "$DB_LAN_USER")
   local DB_LAN_PASS_PHP
   DB_LAN_PASS_PHP=$(php_single_quote_escape "$DB_LAN_PASS")
-  local LAUNCHER_VERSION_PHP
-  LAUNCHER_VERSION_PHP=$(php_single_quote_escape "${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}")
-  local LAUNCHER_GIT_BRANCH_PHP
-  LAUNCHER_GIT_BRANCH_PHP=$(php_single_quote_escape "${LAUNCHER_GIT_BRANCH:-unknown}")
-  local LAUNCHER_GIT_COMMIT_PHP
-  LAUNCHER_GIT_COMMIT_PHP=$(php_single_quote_escape "${LAUNCHER_GIT_COMMIT:-unknown}")
   local SOAP_PORT=7878
 
   pct exec "$WEB_CTID" -- bash -c "
@@ -2022,14 +2052,6 @@ if (!is_array(\$config)) {
     [
         'default_realm_id' => ${DEFAULT_REALM_ID},
         'multirealm' => ${MULTIREALM_FLAG},
-    ]
-);
-\$config['launcherRuntime'] = array_merge(
-    is_array(\$config['launcherRuntime'] ?? null) ? \$config['launcherRuntime'] : [],
-    [
-        'version' => '${LAUNCHER_VERSION_PHP}',
-        'git_branch' => '${LAUNCHER_GIT_BRANCH_PHP}',
-        'git_commit' => '${LAUNCHER_GIT_COMMIT_PHP}',
     ]
 );
 \$config['realmDbMap'] = ${REALM_MAP_PHP};
