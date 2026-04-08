@@ -84,11 +84,18 @@ refresh_website_git_tracking() {
   local branch="unknown"
   local commit="unknown"
   local commit_date="unknown"
+  local target_repo="${WEBSITE_SRC_DIR}"
 
-  if [[ -n "${WEB_CTID:-}" ]] && pct exec "$WEB_CTID" -- test -d "${WEBSITE_SRC_DIR}/.git" 2>/dev/null; then
-    branch=$(pct exec "$WEB_CTID" -- bash -lc "git -C '${WEBSITE_SRC_DIR}' rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
-    commit=$(pct exec "$WEB_CTID" -- bash -lc "git -C '${WEBSITE_SRC_DIR}' rev-parse --short=12 HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
-    commit_date=$(pct exec "$WEB_CTID" -- bash -lc "git -C '${WEBSITE_SRC_DIR}' log -1 --date=short --format=%cd 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+  auto_detect_stack
+
+  if [[ -n "${WEB_CTID:-}" ]] && ! pct exec "$WEB_CTID" -- test -d "${target_repo}/.git" 2>/dev/null; then
+    target_repo="/var/www/html"
+  fi
+
+  if [[ -n "${WEB_CTID:-}" ]] && pct exec "$WEB_CTID" -- test -d "${target_repo}/.git" 2>/dev/null; then
+    branch=$(pct exec "$WEB_CTID" -- bash -c "git -C '${target_repo}' rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+    commit=$(pct exec "$WEB_CTID" -- bash -c "git -C '${target_repo}' rev-parse --short=12 HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+    commit_date=$(pct exec "$WEB_CTID" -- bash -c "git -C '${target_repo}' log -1 --date=short --format=%cd 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
   fi
 
   set_or_append_config_line "WEBSITE_GIT_BRANCH" "\"${branch}\""
