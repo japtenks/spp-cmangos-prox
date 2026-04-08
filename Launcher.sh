@@ -91,9 +91,9 @@ refresh_website_git_tracking() {
     commit_date=$(pct exec "$WEB_CTID" -- bash -lc "git -C /var/www/html log -1 --date=short --format=%cd 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
   fi
 
-  set_config_value "WEBSITE_GIT_BRANCH" "$branch"
-  set_config_value "WEBSITE_GIT_COMMIT" "$commit"
-  set_config_value "WEBSITE_GIT_DATE" "$commit_date"
+  set_or_append_config_line "WEBSITE_GIT_BRANCH" "\"${branch}\""
+  set_or_append_config_line "WEBSITE_GIT_COMMIT" "\"${commit}\""
+  set_or_append_config_line "WEBSITE_GIT_DATE" "\"${commit_date}\""
 
   WEBSITE_GIT_BRANCH="$branch"
   WEBSITE_GIT_COMMIT="$commit"
