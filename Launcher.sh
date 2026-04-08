@@ -1200,6 +1200,11 @@ ensure_expansion_context() {
   GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
 }
 
+ensure_service_target_context() {
+  ensure_expansion_context || return 1
+  ensure_game_container || return 1
+}
+
 #menus and functions
 
 main() {
@@ -1207,8 +1212,6 @@ main() {
   while true; do
   
     expansion_menu
- 
-    service_menu
   done
 }
 expansion_menu() {
@@ -1235,6 +1238,7 @@ expansion_menu() {
     done
 
     [[ -n "${EXPANSION:-}" ]] && echo "S - Shared Services"
+    echo "M - Service Menu"
     echo "0 - Exit"
     echo
 
@@ -1245,6 +1249,11 @@ expansion_menu() {
 
     if [[ "$SEL" =~ ^[Ss]$ ]]; then
       shared_services_menu
+      continue
+    fi
+
+    if [[ "$SEL" =~ ^[Mm]$ ]]; then
+      service_menu
       continue
     fi
 
@@ -1968,18 +1977,22 @@ PHP
 }
 
 service_menu() {
-  ensure_expansion_context || return
   ensure_shared_stack || return
-  ensure_game_container || return
 
   while true; do
     clear
     print_banner
-    print_version
+    if [[ -n "${EXPANSION:-}" ]]; then
+      print_version
+    else
+      echo "No install path selected yet."
+    fi
 
     echo
+    echo "Current Install Path: ${EXPANSION:-none}"
     echo "1 - Stack Control"
     echo "2 - Maintenance"
+    echo "3 - Select Install Path"
     echo
     echo "4 - Remote Console"
     echo "5 - Live World Log"
@@ -1992,12 +2005,13 @@ service_menu() {
     read -p "Selection: " MAIN
 
     case "$MAIN" in
-      1) stack_control_menu ;;
-      2) maintenance_menu ;;
-      4) connect_ra ;;
-      5) live_logs ;;
-      6) toggle_autostart ;;
-	  7) server_info_menu ;;
+      1) ensure_service_target_context && stack_control_menu ;;
+      2) ensure_service_target_context && maintenance_menu ;;
+      3) expansion_menu ;;
+      4) ensure_service_target_context && connect_ra ;;
+      5) ensure_service_target_context && live_logs ;;
+      6) ensure_service_target_context && toggle_autostart ;;
+	  7) ensure_service_target_context && server_info_menu ;;
       0) return ;;
     esac
   done
