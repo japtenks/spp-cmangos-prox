@@ -404,6 +404,25 @@ is_vmangos() {
   [[ "${1:-$EXPANSION}" == "vmangos" ]]
 }
 
+is_shared_classic_family() {
+  case "${1:-$EXPANSION}" in
+    classic|tbc|wotlk) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+owns_realm_install_lane() {
+  is_vmangos || is_master
+}
+
+realm_version_owner() {
+  if is_vmangos; then
+    echo "$EXPANSION"
+  else
+    echo "${MASTER_EXPANSION:-$EXPANSION}"
+  fi
+}
+
 
 #helper functions
 get_storage() {
@@ -601,9 +620,11 @@ derive_db_names() {
   INSTALL_DIR=$(expansion_install_dir "$EXPANSION") || return 1
   EXPANSION_TITLE=$(expansion_title "$EXPANSION")
 
-  if [[ -n "${MASTER_REALMD_DB:-}" ]]; then
+  if is_vmangos; then
+    REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
+  elif [[ -n "${MASTER_REALMD_DB:-}" ]]; then
     REALM_DB_NAME="$MASTER_REALMD_DB"
-  elif [[ -n "${MASTER_EXPANSION:-}" ]]; then
+  elif [[ -n "${MASTER_EXPANSION:-}" ]] && is_shared_classic_family "$MASTER_EXPANSION"; then
     REALM_DB_NAME=$(expansion_realm_db_name "$MASTER_EXPANSION") || {
       echo "Unknown master expansion: $MASTER_EXPANSION"
       return 1
@@ -625,7 +646,7 @@ set_config_value() {
 }
 
 pin_master_expansion() {
-  if [[ -z "${MASTER_EXPANSION:-}" ]]; then
+  if [[ -z "${MASTER_EXPANSION:-}" ]] || { is_vmangos "$MASTER_EXPANSION" && is_shared_classic_family; }; then
     MASTER_EXPANSION="$EXPANSION"
     set_config_value "MASTER_EXPANSION" "$MASTER_EXPANSION"
     echo "Pinned master expansion: $MASTER_EXPANSION"
@@ -635,6 +656,11 @@ pin_master_expansion() {
 }
 
 pin_master_realmd_db() {
+  if ! is_shared_classic_family; then
+    echo "vMaNGOS uses a dedicated realm DB and does not pin MASTER_REALMD_DB."
+    return 0
+  fi
+
   if [[ -z "${MASTER_REALMD_DB:-}" ]]; then
     MASTER_REALMD_DB=$(expansion_realm_db_name "$EXPANSION") || return 1
     set_config_value "MASTER_REALMD_DB" "$MASTER_REALMD_DB"
@@ -1081,7 +1107,11 @@ expansion_menu() {
       EXP="${ALLOWED_EXPANSIONS[$i]}"
       CTID="${GAME_CTIDS[$EXP]:-}"
       STATUS=$([[ -n "$CTID" ]] && echo "[Installed - CTID $CTID]" || echo "[Not Installed]")
-      echo "$((i+1)) - $(expansion_title "$EXP")"
+      TITLE="$(expansion_title "$EXP")"
+      if [[ "$EXP" == "vmangos" ]]; then
+        TITLE="${TITLE} [Dedicated Realm DB]"
+      fi
+      echo "$((i+1)) - $TITLE"
       echo "       $STATUS"
       echo
     done
@@ -1314,7 +1344,7 @@ update_db_conf() {
 
   # auto-pick first installed expansion as master
   if [[ -z "${MASTER_EXPANSION:-}" ]]; then
-    for EXP in classic tbc wotlk vmangos; do
+    for EXP in classic tbc wotlk; do
       if [[ -n "${GAME_CTIDS[$EXP]:-}" ]]; then
         MASTER_EXPANSION="$EXP"
         break
@@ -1605,6 +1635,7 @@ install_website() {
 
   if is_vmangos; then
     echo "Website install is not implemented for vMaNGOS in this launcher yet."
+    echo "vMaNGOS stays outside the shared website services topology."
     echo "Skipping website deployment."
     read -p "Press Enter to continue..."
     return 0
@@ -2570,7 +2601,11 @@ database_menu() {
 
 install_db() {
   derive_db_names || return 1
-  echo "Installing full DB (including realm)..."
+  if is_vmangos; then
+    echo "Installing full DB with dedicated vMaNGOS realm/logon flow..."
+  else
+    echo "Installing full DB (including shared-classic-family realm DB)..."
+  fi
   if is_vmangos; then
     create_lan_db_user
   fi
@@ -2588,6 +2623,11 @@ install_db() {
 # Non-master expansions skip realm DB install
 install_db_no_realm() {
   derive_db_names || return 1
+  if is_vmangos; then
+    echo "vMaNGOS always installs its own dedicated realm DB."
+    install_db
+    return $?
+  fi
   echo "Installing expansion DB (world/chars/logs only)..."
   if is_vmangos; then
     create_lan_db_user
@@ -2691,48 +2731,6 @@ INSTALL_DATE=$(date +%F_%H:%M)
 
 write_version "${EXPANSION}_world_version.spp" \
 "${WORLD_EXPECTED}|${INSTALL_DATE}"
-  read -p "Press Enter to return..." _
-}
-install_realm() {
-  derive_db_names || return 1
-
-  # Pin master on first realm install
-  pin_master_expansion
-  pin_master_realmd_db || return 1
-  derive_db_names || return 1
-
-  echo "Installing realm DB..."
-
-  if pct exec "$DB_CTID" -- bash -c "
-    set -euo pipefail
-    export MYSQL_PWD='${DB_ROOT_PASS}'
-
-    BASE=\"/opt/spp-sql/sql/${MAP_KEY}\"
-    REALM_DB=\"${REALM_DB_NAME}\"
-
-    mariadb -u root < \"\$BASE/drop_realmd.sql\"
-    mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmd.sql\"
-    mariadb -u root \"\$REALM_DB\" < \"\$BASE/realmlist.sql\"
-
-    for f in \"\$BASE/realmd\"/*.sql; do
-      [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
-    done
-
-    for dir in \$(ls -1 \"\$BASE/updates/realmd\" | sort -n); do
-      for f in \"\$BASE/updates/realmd/\$dir\"/*.sql; do
-        [ -f \"\$f\" ] && mariadb -u root \"\$REALM_DB\" < \"\$f\"
-      done
-    done
-  "; then
-    echo "Realm DB installed successfully."
-  else
-    echo "Realm DB install FAILED."
-    return 1
-  fi
-
-  sync_realmd_db_version_markers || return 1
-
-  write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
   read -p "Press Enter to return..." _
 }
 install_char() {
@@ -3350,12 +3348,9 @@ __BOT_ROTATION_REMOTE__
 
 install_realm() {
   derive_db_names || return 1
-  pin_master_expansion
-  pin_master_realmd_db || return 1
-  derive_db_names || return 1
-  echo "Installing realm DB..."
 
   if is_vmangos; then
+    echo "Installing realm DB via dedicated vMaNGOS logon flow..."
     local DB_IP
     DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
@@ -3386,10 +3381,16 @@ install_realm() {
     fi
 
     configure_bot_rotation_log || return 1
-    write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
+    write_version "$(realm_version_owner)_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
     read -p "Press Enter to return..." _
     return 0
   fi
+
+  pin_master_expansion
+  pin_master_realmd_db || return 1
+  derive_db_names || return 1
+
+  echo "Installing realm DB via shared classic-family realmd flow..."
 
   if pct exec "$DB_CTID" -- bash -c "
     export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -3418,7 +3419,7 @@ install_realm() {
   sync_realmd_db_version_markers || return 1
   configure_bot_rotation_log || return 1
 
-  write_version "${MASTER_EXPANSION}_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
+  write_version "$(realm_version_owner)_realm_version.spp" "${VERSION_MAP[$EXPANSION:REALM]}"
   read -p "Press Enter to return..." _
 }
 
@@ -3538,6 +3539,7 @@ update_db_type() {
   local TYPE="$1"
 
   if is_vmangos; then
+    echo "vMaNGOS uses a dedicated SQL/update lane."
     echo "Incremental DB update automation is not implemented for vmangos yet."
     return 0
   fi
@@ -3657,7 +3659,7 @@ full_install() {
     "/opt/${EXPANSION}_logs_version.spp" \
     "/opt/${EXPANSION}_maps_version.spp"
 
-  if is_master; then
+  if owns_realm_install_lane; then
     pct exec "$DB_CTID" -- rm -f \
       "/opt/${EXPANSION}_realm_version.spp" \
       "/opt/${EXPANSION}_website_version.spp"
@@ -3672,18 +3674,20 @@ full_install() {
     mariadb -u root -e \"DROP DATABASE IF EXISTS ${EXPANSION}armory;\"
   "
 
-  # Only drop realm DB if we are the master (it's shared)
-  if is_master; then
+  # Shared classic-family expansions only drop the master realm DB; vMaNGOS drops its dedicated realm DB.
+  if owns_realm_install_lane; then
     pct exec "$DB_CTID" -- bash -c "
       export MYSQL_PWD='${DB_ROOT_PASS}'
       mariadb -u root -e \"DROP DATABASE IF EXISTS ${REALM_DB_NAME};\"
     "
-    pin_master_expansion
+    if ! is_vmangos; then
+      pin_master_expansion
+    fi
   fi
 
   comp_server
 
-  if is_master; then
+  if owns_realm_install_lane; then
     install_db
   else
     install_db_no_realm
