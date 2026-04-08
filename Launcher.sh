@@ -1272,6 +1272,7 @@ main() {
 
   while true; do
   
+    expansion_menu
     service_menu
   done
 }
