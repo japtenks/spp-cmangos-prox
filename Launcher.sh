@@ -1971,6 +1971,12 @@ web_config() {
   DB_LAN_USER_PHP=$(php_single_quote_escape "$DB_LAN_USER")
   local DB_LAN_PASS_PHP
   DB_LAN_PASS_PHP=$(php_single_quote_escape "$DB_LAN_PASS")
+  local LAUNCHER_VERSION_PHP
+  LAUNCHER_VERSION_PHP=$(php_single_quote_escape "${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}")
+  local LAUNCHER_GIT_BRANCH_PHP
+  LAUNCHER_GIT_BRANCH_PHP=$(php_single_quote_escape "${LAUNCHER_GIT_BRANCH:-unknown}")
+  local LAUNCHER_GIT_COMMIT_PHP
+  LAUNCHER_GIT_COMMIT_PHP=$(php_single_quote_escape "${LAUNCHER_GIT_COMMIT:-unknown}")
   local SOAP_PORT=7878
 
   pct exec "$WEB_CTID" -- bash -c "
@@ -2016,6 +2022,14 @@ if (!is_array(\$config)) {
     [
         'default_realm_id' => ${DEFAULT_REALM_ID},
         'multirealm' => ${MULTIREALM_FLAG},
+    ]
+);
+\$config['launcherRuntime'] = array_merge(
+    is_array(\$config['launcherRuntime'] ?? null) ? \$config['launcherRuntime'] : [],
+    [
+        'version' => '${LAUNCHER_VERSION_PHP}',
+        'git_branch' => '${LAUNCHER_GIT_BRANCH_PHP}',
+        'git_commit' => '${LAUNCHER_GIT_COMMIT_PHP}',
     ]
 );
 \$config['realmDbMap'] = ${REALM_MAP_PHP};
