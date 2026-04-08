@@ -423,6 +423,63 @@ realm_version_owner() {
   fi
 }
 
+resolve_shared_master_expansion() {
+  local candidate
+
+  if [[ -n "${MASTER_EXPANSION:-}" ]] && is_shared_classic_family "$MASTER_EXPANSION"; then
+    echo "$MASTER_EXPANSION"
+    return 0
+  fi
+
+  for candidate in classic tbc wotlk; do
+    if [[ -n "${GAME_CTIDS[$candidate]:-}" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if is_shared_classic_family "${EXPANSION:-}"; then
+    echo "$EXPANSION"
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_shared_classic_context() {
+  local shared_expansion
+  auto_detect_stack
+  shared_expansion=$(resolve_shared_master_expansion) || {
+    echo "Shared services are only available for Classic, TBC, or WotLK install paths."
+    echo "Install one of options 1-3 first, then use Shared Services."
+    return 1
+  }
+
+  EXPANSION="$shared_expansion"
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+  if [[ -z "${GAME_CTID:-}" ]]; then
+    echo "Shared master install path '$EXPANSION' is not installed yet."
+    echo "Install the selected Classic/TBC/WotLK path before using shared website or shared config tools."
+    return 1
+  fi
+}
+
+run_with_shared_classic_context() {
+  local target_fn="$1"
+  shift
+
+  local saved_expansion="${EXPANSION:-}"
+  local saved_game_ctid="${GAME_CTID:-}"
+  local rc=0
+
+  ensure_shared_classic_context || return 1
+  "$target_fn" "$@" || rc=$?
+
+  EXPANSION="$saved_expansion"
+  GAME_CTID="$saved_game_ctid"
+  return $rc
+}
+
 
 #helper functions
 get_storage() {
@@ -1083,6 +1140,17 @@ ensure_game_container() {
   GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
 }
 
+ensure_expansion_context() {
+  if [[ -z "${EXPANSION:-}" ]]; then
+    expansion_menu
+  fi
+
+  [[ -z "${EXPANSION:-}" ]] && return 1
+
+  auto_detect_stack
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+}
+
 #menus and functions
 
 main() {
@@ -1100,7 +1168,7 @@ expansion_menu() {
     print_banner
     auto_detect_stack
 
-    echo "Choose Expansion:"
+    echo "Choose Install Path:"
     echo
 
     for i in "${!ALLOWED_EXPANSIONS[@]}"; do
@@ -1112,6 +1180,7 @@ expansion_menu() {
         TITLE="${TITLE} [Dedicated Realm DB]"
       fi
       echo "$((i+1)) - $TITLE"
+      echo "       [Install Path: $EXP]"
       echo "       $STATUS"
       echo
     done
@@ -1145,7 +1214,8 @@ shared_services_menu() {
   while true; do
     print_banner
     echo
-    echo "Shared Services"
+    echo "Shared Services (Classic/TBC/WotLK)"
+    echo "Website is the intended admin surface for shared realms after bootstrap."
     echo
     echo "1 - Status"
     echo "2 - Service Control"
@@ -1170,6 +1240,7 @@ shared_services_menu() {
 }
 
 shared_status_menu() {
+  auto_detect_stack
   for CT in "$DB_CTID" "$LOGIN_CTID" "$WEB_CTID"; do
     NAME=$(pct config "$CT" | awk -F': ' '/hostname/ {print $2}')
     echo
@@ -1313,10 +1384,11 @@ start_mangosd_managed "sagrid-argus-install"
 
 shared_config_menu() {
   echo
-  echo "Configuration"
+  echo "Configuration (Shared Classic/TBC/WotLK)"
+  echo "Launcher realmlist actions here are bootstrap/repair only."
   echo
   echo "1 - Apply Server Confs"
-  echo "2 - Fix Realmlist"
+  echo "2 - Bootstrap/Repair Shared Realmlist"
   echo "3 - Autostart services creation"
   echo "4 - RealmD Install"
   echo "5 - spp configs"
@@ -1326,11 +1398,11 @@ shared_config_menu() {
   read -p "Selection: " C
 
   case "$C" in
-    1) update_db_conf ;;
-    2) fix_realm_entry ;;
-    3) service_create ;;
-	4) deploy_realmd ;;
-	5) deploy_spp_configs ;;
+    1) run_with_shared_classic_context update_db_conf ;;
+    2) run_with_shared_classic_context fix_realm_entry ;;
+    3) run_with_shared_classic_context service_create ;;
+	4) run_with_shared_classic_context deploy_realmd ;;
+	5) run_with_shared_classic_context deploy_spp_configs ;;
 	6) fix_mariadb_bind ;;
   esac
 }
@@ -1342,17 +1414,10 @@ update_db_conf() {
 
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
 
-  # auto-pick first installed expansion as master
-  if [[ -z "${MASTER_EXPANSION:-}" ]]; then
-    for EXP in classic tbc wotlk; do
-      if [[ -n "${GAME_CTIDS[$EXP]:-}" ]]; then
-        MASTER_EXPANSION="$EXP"
-        break
-      fi
-    done
-  fi
-
-  : ${MASTER_EXPANSION:="$EXPANSION"}
+  MASTER_EXPANSION=$(resolve_shared_master_expansion) || {
+    echo "No shared Classic/TBC/WotLK master expansion is available yet."
+    return 1
+  }
 
   MASTER_INSTALL_DIR=$(expansion_install_dir "$MASTER_EXPANSION") || return 1
 
@@ -1416,13 +1481,8 @@ update_db_conf() {
 }
 
 service_create() {
-  if [[ -z "${EXPANSION:-}" ]]; then
-    echo "Select expansion:"
-    select EXP in classic tbc wotlk vmangos; do
-      [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-    done
-  fi
-  derive_db_names
+  ensure_expansion_context || return 1
+  derive_db_names || return 1
 
   # realmd service only written/reloaded on master expansion
   if is_master; then
@@ -1475,13 +1535,7 @@ EOF
   apply_autostart_setting
 }
 fix_realm_entry() {
-  if [[ -z "${EXPANSION:-}" ]]; then
-    echo "Select expansion:"
-    select EXP in classic tbc wotlk vmangos; do
-      [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-    done
-  fi
-
+  ensure_expansion_context || return 1
   derive_db_names || return 1
 
   LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
@@ -1500,7 +1554,12 @@ fix_realm_entry() {
     \"
   "
 
-  echo "Realm entry updated for ${EXPANSION_TITLE} (ID: ${REALM_ID}) in ${REALM_DB_NAME}."
+  if is_vmangos; then
+    echo "Realm entry updated for ${EXPANSION_TITLE} (ID: ${REALM_ID}) in ${REALM_DB_NAME}."
+  else
+    echo "Bootstrap/repair realmlist entry updated for ${EXPANSION_TITLE} (ID: ${REALM_ID}) in shared DB ${REALM_DB_NAME}."
+    echo "Use the website for ongoing shared realmlist administration."
+  fi
 }
 
 fix_mariadb_bind() {
@@ -1521,13 +1580,7 @@ systemctl restart mariadb
 
 }
 deploy_spp_configs() {
-
-if [[ -z "${EXPANSION:-}" ]]; then
-  echo "Select expansion:"
-  select EXP in classic tbc wotlk vmangos; do
-    [[ -n "$EXP" ]] && EXPANSION="$EXP" && break
-  done
-fi
+ensure_expansion_context || return 1
 derive_db_names || return 1
 
 pct exec "$GAME_CTID" -- bash -c "
@@ -1587,7 +1640,8 @@ deploy_realmd() {
 
 shared_website_menu() {
   echo
-  echo "Website"
+  echo "Website (Shared Classic/TBC/WotLK Admin)"
+  echo "Use the website as the primary admin surface for shared realmlist changes."
   echo
   echo "1 - Install Website"
   echo "2 - Update Website"
@@ -1599,10 +1653,10 @@ shared_website_menu() {
   read -p "Selection: " W
 
   case "$W" in
-    1) install_website ;;
-    2) update_website ;;
-	3) web_config ;;
-    4) update_config_protected ;;
+    1) run_with_shared_classic_context install_website ;;
+    2) run_with_shared_classic_context update_website ;;
+	3) run_with_shared_classic_context web_config ;;
+    4) run_with_shared_classic_context update_config_protected ;;
   esac
 }
 
@@ -1643,6 +1697,7 @@ install_website() {
 
   if ! is_master; then
     echo "Website is pinned to master expansion: ${MASTER_EXPANSION}."
+    echo "The website is the intended shared admin surface for Classic/TBC/WotLK realms."
     echo "To change the active world shown on the website, use 'Website' -> 'Switch Active World'."
     read -p "Press Enter to continue..."
     return 0
@@ -1652,6 +1707,7 @@ install_website() {
 
   echo
   echo "Installing Website (master: ${MASTER_EXPANSION})..."
+  echo "The website will be the primary admin surface for shared Classic/TBC/WotLK realmlist management."
   echo
 
   pct exec "$WEB_CTID" -- bash -c "
@@ -1677,6 +1733,7 @@ install_website() {
 
   echo
   echo "Website installed."
+  echo "Use the website for ongoing shared realm admin after bootstrap."
   echo
   read -p "Press Enter to continue..."
 }
@@ -1705,6 +1762,8 @@ install_website_db() {
   else
     echo "Skipping website.sql — master is ${MASTER_EXPANSION}."
   fi
+
+  echo "Shared realmlist administration should happen through the website after bootstrap."
 
   echo "Adding support tables to ${EXPANSION}armory..."
   if pct exec "$DB_CTID" -- bash -c "
@@ -1752,7 +1811,20 @@ update_website() {
 }
 web_config() {
   auto_detect_stack
-  derive_db_names || return 1
+  local SAVED_EXPANSION="${EXPANSION:-}"
+  local SAVED_GAME_CTID="${GAME_CTID:-}"
+
+  if ! ensure_shared_classic_context; then
+    EXPANSION="$SAVED_EXPANSION"
+    GAME_CTID="$SAVED_GAME_CTID"
+    return 1
+  fi
+
+  derive_db_names || {
+    EXPANSION="$SAVED_EXPANSION"
+    GAME_CTID="$SAVED_GAME_CTID"
+    return 1
+  }
 
   local DB_IP
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
@@ -1841,15 +1913,15 @@ PHP
 
   echo "Web config updated — Bookmark website at http://${WEB_IP}"
   read -p "Press Enter to continue..."
+
+  EXPANSION="$SAVED_EXPANSION"
+  GAME_CTID="$SAVED_GAME_CTID"
 }
 
 service_menu() {
-  auto_detect_stack
-  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
-
-
-ensure_shared_stack || return
-ensure_game_container || return
+  ensure_expansion_context || return
+  ensure_shared_stack || return
+  ensure_game_container || return
 
   while true; do
     clear
@@ -3840,6 +3912,7 @@ sync_bot_rotation_config || true
 }
 
 server_info_menu() {
+  ensure_expansion_context || return 1
   auto_detect_stack
   LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
 
@@ -3859,8 +3932,13 @@ server_info_menu() {
     echo "2 - Bots Settings"
     echo "3 - RealmD Settings"
     echo
-    echo "4 - Change Server Address"
-    echo "5 - Change Realm Name"
+    if is_vmangos; then
+      echo "4 - Change Server Address"
+      echo "5 - Change Realm Name"
+    else
+      echo "4 - Change Server Address (use website for shared realms)"
+      echo "5 - Change Realm Name (use website for shared realms)"
+    fi
     echo "6 - Other Settings"
 
     echo "7 - Crash Logs"
@@ -3959,6 +4037,13 @@ edit_other_settings() {
 }
 change_server_address() {
   derive_db_names || return 1
+
+  if ! is_vmangos; then
+    echo "Use the website admin page to change shared Classic/TBC/WotLK realm addresses."
+    read -p "Press Enter..." _
+    return 0
+  fi
+
   read -p "Enter new public IP: " NEWIP
 
   pct exec "$DB_CTID" -- bash -c "
@@ -3973,6 +4058,13 @@ change_server_address() {
 }
 change_realm_name() {
   derive_db_names || return 1
+
+  if ! is_vmangos; then
+    echo "Use the website admin page to change shared Classic/TBC/WotLK realm names."
+    read -p "Press Enter..." _
+    return 0
+  fi
+
   read -p "Enter new realm name: " NEWNAME
 
   pct exec "$DB_CTID" -- bash -c "
