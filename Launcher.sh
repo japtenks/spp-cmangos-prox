@@ -77,6 +77,41 @@ refresh_launcher_git_tracking() {
   LAUNCHER_GIT_COMMIT="$commit"
 }
 
+update_launcher_self() {
+  echo
+  echo "Updating launcher from git..."
+  echo
+
+  git -C "$SCRIPT_DIR" fetch --all --prune || {
+    echo "Launcher fetch failed."
+    read -p "Press Enter to continue..." _
+    return 1
+  }
+
+  git -C "$SCRIPT_DIR" pull --ff-only || {
+    echo "Launcher update failed."
+    read -p "Press Enter to continue..." _
+    return 1
+  }
+
+  chmod +x "$SCRIPT_DIR/Launcher.sh" 2>/dev/null || true
+
+  normalize_config_env
+  source "$CONFIG_FILE"
+  ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
+  LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
+  LAUNCHER_GIT_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
+  LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
+  refresh_launcher_git_tracking
+
+  echo
+  echo "Launcher updated to ${LAUNCHER_GIT_BRANCH}@${LAUNCHER_GIT_COMMIT}."
+  echo "Reloading launcher..."
+  sleep 1
+
+  exec bash "$SCRIPT_DIR/Launcher.sh"
+}
+
 auto_detect_stack() {
   local _pct
   _pct=$(pct list) || return
@@ -2025,6 +2060,7 @@ service_menu() {
     echo
     echo "6 - Autostart Status: ($ASV)"
 	echo "7 - Server Info"
+    echo "8 - Update Launcher"
     echo "0 - Back to Launcher"
     echo
 
@@ -2038,6 +2074,7 @@ service_menu() {
       5) ensure_service_target_context && live_logs ;;
       6) ensure_service_target_context && toggle_autostart ;;
 	  7) ensure_service_target_context && server_info_menu ;;
+      8) update_launcher_self ;;
       0) return ;;
     esac
   done
