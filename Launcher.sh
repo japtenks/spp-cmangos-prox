@@ -50,6 +50,9 @@ normalize_config_env() {
   append_config_default_line "WEBSITE_GIT_BRANCH" '"unknown"'
   append_config_default_line "WEBSITE_GIT_COMMIT" '"unknown"'
   append_config_default_line "WEBSITE_GIT_DATE" '"unknown"'
+  append_config_default_line "WEBSITE_SRC_GIT_BRANCH" '"unknown"'
+  append_config_default_line "WEBSITE_SRC_GIT_COMMIT" '"unknown"'
+  append_config_default_line "WEBSITE_SRC_GIT_DATE" '"unknown"'
 
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_CORE_VERSION" '1'
@@ -84,6 +87,9 @@ refresh_website_git_tracking() {
   local branch="unknown"
   local commit="unknown"
   local commit_date="unknown"
+  local src_branch="unknown"
+  local src_commit="unknown"
+  local src_commit_date="unknown"
 
   if [[ -n "${WEB_CTID:-}" ]] && pct exec "$WEB_CTID" -- test -d /var/www/html/.git 2>/dev/null; then
     branch=$(pct exec "$WEB_CTID" -- bash -lc "git -C /var/www/html rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
@@ -91,13 +97,31 @@ refresh_website_git_tracking() {
     commit_date=$(pct exec "$WEB_CTID" -- bash -lc "git -C /var/www/html log -1 --date=short --format=%cd 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
   fi
 
+  if [[ -n "${WEB_CTID:-}" ]] && pct exec "$WEB_CTID" -- test -d "${WEBSITE_SRC_DIR}/.git" 2>/dev/null; then
+    src_branch=$(pct exec "$WEB_CTID" -- bash -lc "git -C '${WEBSITE_SRC_DIR}' rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+    src_commit=$(pct exec "$WEB_CTID" -- bash -lc "git -C '${WEBSITE_SRC_DIR}' rev-parse --short=12 HEAD 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+    src_commit_date=$(pct exec "$WEB_CTID" -- bash -lc "git -C '${WEBSITE_SRC_DIR}' log -1 --date=short --format=%cd 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+  fi
+
   set_or_append_config_line "WEBSITE_GIT_BRANCH" "\"${branch}\""
   set_or_append_config_line "WEBSITE_GIT_COMMIT" "\"${commit}\""
   set_or_append_config_line "WEBSITE_GIT_DATE" "\"${commit_date}\""
+  set_or_append_config_line "WEBSITE_SRC_GIT_BRANCH" "\"${src_branch}\""
+  set_or_append_config_line "WEBSITE_SRC_GIT_COMMIT" "\"${src_commit}\""
+  set_or_append_config_line "WEBSITE_SRC_GIT_DATE" "\"${src_commit_date}\""
 
   WEBSITE_GIT_BRANCH="$branch"
   WEBSITE_GIT_COMMIT="$commit"
   WEBSITE_GIT_DATE="$commit_date"
+  WEBSITE_SRC_GIT_BRANCH="$src_branch"
+  WEBSITE_SRC_GIT_COMMIT="$src_commit"
+  WEBSITE_SRC_GIT_DATE="$src_commit_date"
+}
+
+website_update_pending() {
+  [[ -n "${WEBSITE_GIT_COMMIT:-}" && -n "${WEBSITE_SRC_GIT_COMMIT:-}" ]] || return 1
+  [[ "${WEBSITE_GIT_COMMIT}" != "unknown" && "${WEBSITE_SRC_GIT_COMMIT}" != "unknown" ]] || return 1
+  [[ "${WEBSITE_GIT_COMMIT}" != "${WEBSITE_SRC_GIT_COMMIT}" ]]
 }
 
 update_launcher_self() {
@@ -253,6 +277,9 @@ LAUNCHER_GIT_COMMIT="unknown"
 WEBSITE_GIT_BRANCH="unknown"
 WEBSITE_GIT_COMMIT="unknown"
 WEBSITE_GIT_DATE="unknown"
+WEBSITE_SRC_GIT_BRANCH="unknown"
+WEBSITE_SRC_GIT_COMMIT="unknown"
+WEBSITE_SRC_GIT_DATE="unknown"
 AUTO_START="0"
 ASV="Off"
 
@@ -356,6 +383,9 @@ LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
 WEBSITE_GIT_BRANCH="${WEBSITE_GIT_BRANCH:-unknown}"
 WEBSITE_GIT_COMMIT="${WEBSITE_GIT_COMMIT:-unknown}"
 WEBSITE_GIT_DATE="${WEBSITE_GIT_DATE:-unknown}"
+WEBSITE_SRC_GIT_BRANCH="${WEBSITE_SRC_GIT_BRANCH:-unknown}"
+WEBSITE_SRC_GIT_COMMIT="${WEBSITE_SRC_GIT_COMMIT:-unknown}"
+WEBSITE_SRC_GIT_DATE="${WEBSITE_SRC_GIT_DATE:-unknown}"
 refresh_launcher_git_tracking
 auto_detect_stack
 refresh_website_git_tracking
@@ -1308,10 +1338,15 @@ main() {
   done
 }
 expansion_menu() {
+  local RED="\e[31m"
+  local RESET="\e[0m"
+  local SHARED_LABEL="M - Shared Services"
+
   while true; do
     clear
     print_banner
     auto_detect_stack
+    refresh_website_git_tracking
 
     echo "Choose Install Path:"
     echo
@@ -1330,7 +1365,11 @@ expansion_menu() {
       echo
     done
 
-    echo "M - Shared Services"
+    if website_update_pending; then
+      echo -e "${RED}${SHARED_LABEL}${RESET}"
+    else
+      echo "$SHARED_LABEL"
+    fi
     echo "0 - Exit"
     echo
 
@@ -1354,7 +1393,11 @@ expansion_menu() {
 
 	
 shared_services_menu() {
+  local RED="\e[31m"
+  local RESET="\e[0m"
+  local WEBSITE_LABEL="3 - Website"
   auto_detect_stack
+  refresh_website_git_tracking
 
   while true; do
     print_banner
@@ -1364,7 +1407,11 @@ shared_services_menu() {
     echo
     echo "1 - Status"
     echo "2 - Service Control"
-    echo "3 - Website"
+    if website_update_pending; then
+      echo -e "${RED}${WEBSITE_LABEL}${RESET}"
+    else
+      echo "$WEBSITE_LABEL"
+    fi
     echo "4 - Repo"
     echo "5 - Configuration"
     echo "6 - Update Launcher"
@@ -1786,15 +1833,25 @@ deploy_realmd() {
 }
 
 shared_website_menu() {
+  local RED="\e[31m"
+  local RESET="\e[0m"
+  local UPDATE_LABEL="2 - Update Website"
   auto_detect_stack
   refresh_website_git_tracking
   echo
   echo "Website (Shared Classic/TBC/WotLK Admin)"
   echo "Use the website as the primary admin surface for shared realmlist changes."
   echo "Deployed SPP-Web: ${WEBSITE_GIT_BRANCH}@${WEBSITE_GIT_COMMIT} (${WEBSITE_GIT_DATE})"
+  if [[ "${WEBSITE_SRC_GIT_COMMIT:-unknown}" != "unknown" ]]; then
+    echo "Source SPP-Web:   ${WEBSITE_SRC_GIT_BRANCH}@${WEBSITE_SRC_GIT_COMMIT} (${WEBSITE_SRC_GIT_DATE})"
+  fi
   echo
   echo "1 - Install Website"
-  echo "2 - Update Website"
+  if website_update_pending; then
+    echo -e "${RED}${UPDATE_LABEL}${RESET}"
+  else
+    echo "$UPDATE_LABEL"
+  fi
   echo "3 - Align php for website db"
   echo "4 - Refresh local website config"
   echo
