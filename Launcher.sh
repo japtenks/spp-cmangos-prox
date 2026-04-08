@@ -11,6 +11,12 @@ declare -A GAME_CTIDS
 WEBSITE_REPO="https://github.com/japtenks/SPP-Web.git"
 WEBSITE_SRC_DIR="/opt/SPP-Web"
 
+php_single_quote_escape() {
+  local value="${1//\\/\\\\}"
+  value="${value//\'/\\\'}"
+  printf '%s' "$value"
+}
+
 auto_detect_stack() {
   local _pct
   _pct=$(pct list) || return
@@ -292,6 +298,105 @@ expansion_realm_id() {
     vmangos) echo 4 ;;
     *) return 1 ;;
   esac
+}
+
+expansion_world_db_name() {
+  case "$1" in
+    classic) echo "classicmangos" ;;
+    tbc) echo "tbcmangos" ;;
+    wotlk) echo "wotlkmangos" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_char_db_name() {
+  case "$1" in
+    classic) echo "classiccharacters" ;;
+    tbc) echo "tbccharacters" ;;
+    wotlk) echo "wotlkcharacters" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_armory_db_name() {
+  case "$1" in
+    classic) echo "classicarmory" ;;
+    tbc) echo "tbcarmory" ;;
+    wotlk) echo "wotlkarmory" ;;
+    *) return 1 ;;
+  esac
+}
+
+expansion_bots_db_name() {
+  case "$1" in
+    classic) echo "classicplayerbots" ;;
+    tbc) echo "tbcplayerbots" ;;
+    wotlk) echo "wotlkplayerbots" ;;
+    *) return 1 ;;
+  esac
+}
+
+website_realm_map_php() {
+  local master_realm_db="$1"
+  local included=0
+
+  echo "["
+  for realm_exp in classic tbc wotlk; do
+    if [[ -n "${GAME_CTIDS[$realm_exp]:-}" || "$realm_exp" == "${EXPANSION:-}" ]]; then
+      local realm_id world_db char_db armory_db bots_db
+      realm_id=$(expansion_realm_id "$realm_exp") || continue
+      world_db=$(expansion_world_db_name "$realm_exp") || continue
+      char_db=$(expansion_char_db_name "$realm_exp") || continue
+      armory_db=$(expansion_armory_db_name "$realm_exp") || continue
+      bots_db=$(expansion_bots_db_name "$realm_exp") || continue
+      included=1
+      cat <<EOF
+    ${realm_id} => [
+        'realmd' => '${master_realm_db}',
+        'world' => '${world_db}',
+        'chars' => '${char_db}',
+        'armory' => '${armory_db}',
+        'bots' => '${bots_db}',
+    ],
+EOF
+    fi
+  done
+  if [[ $included -eq 0 && ! is_vmangos ]]; then
+    local realm_id world_db char_db armory_db bots_db
+    realm_id=$(expansion_realm_id "$EXPANSION") || true
+    world_db=$(expansion_world_db_name "$EXPANSION") || true
+    char_db=$(expansion_char_db_name "$EXPANSION") || true
+    armory_db=$(expansion_armory_db_name "$EXPANSION") || true
+    bots_db=$(expansion_bots_db_name "$EXPANSION") || true
+    if [[ -n "${realm_id:-}" && -n "${world_db:-}" ]]; then
+      cat <<EOF
+    ${realm_id} => [
+        'realmd' => '${master_realm_db}',
+        'world' => '${world_db}',
+        'chars' => '${char_db}',
+        'armory' => '${armory_db}',
+        'bots' => '${bots_db}',
+    ],
+EOF
+    fi
+  fi
+  echo "]"
+}
+
+website_enabled_realm_ids_php() {
+  local ids=()
+  local realm_exp
+  for realm_exp in classic tbc wotlk; do
+    if [[ -n "${GAME_CTIDS[$realm_exp]:-}" || "$realm_exp" == "${EXPANSION:-}" ]]; then
+      ids+=("$(expansion_realm_id "$realm_exp")")
+    fi
+  done
+  if [[ ${#ids[@]} -eq 0 && ! is_vmangos ]]; then
+    ids+=("$(expansion_realm_id "$EXPANSION")")
+  fi
+  local joined
+  joined=$(IFS=,; echo "${ids[*]}")
+  echo "[${joined}]"
 }
 
 is_vmangos() {
@@ -1563,6 +1668,7 @@ update_website() {
   web_config
 }
 web_config() {
+  auto_detect_stack
   derive_db_names || return 1
 
   local DB_IP
@@ -1571,6 +1677,27 @@ web_config() {
   WEB_IP=$(pct exec "$WEB_CTID" -- hostname -I | awk '{print $1}')
   local GAME_IP
   GAME_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
+  local DEFAULT_REALM_ID
+  DEFAULT_REALM_ID=$(expansion_realm_id "${MASTER_EXPANSION:-$EXPANSION}")
+  local MASTER_REALM_DB
+  MASTER_REALM_DB=$(expansion_realm_db_name "${MASTER_EXPANSION:-$EXPANSION}")
+  local REALM_MAP_PHP
+  REALM_MAP_PHP=$(website_realm_map_php "$MASTER_REALM_DB")
+  local ENABLED_REALM_IDS_PHP
+  ENABLED_REALM_IDS_PHP=$(website_enabled_realm_ids_php)
+  local MULTIREALM_FLAG=0
+  if [[ "$ENABLED_REALM_IDS_PHP" == *","* ]]; then
+    MULTIREALM_FLAG=1
+  fi
+  local DB_IP_PHP
+  DB_IP_PHP=$(php_single_quote_escape "$DB_IP")
+  local GAME_IP_PHP
+  GAME_IP_PHP=$(php_single_quote_escape "$GAME_IP")
+  local DB_LAN_USER_PHP
+  DB_LAN_USER_PHP=$(php_single_quote_escape "$DB_LAN_USER")
+  local DB_LAN_PASS_PHP
+  DB_LAN_PASS_PHP=$(php_single_quote_escape "$DB_LAN_PASS")
+  local SOAP_PORT=7878
 
   pct exec "$WEB_CTID" -- bash -c "
     FILE=/var/www/html/config/config-protected.local.php
@@ -1581,11 +1708,49 @@ web_config() {
         cp -f /var/www/html/config/config-protected.example.php \$FILE
       fi
     fi
-    sed -i \"s|'host' => '.*'|'host' => '${DB_IP}'|\"       \$FILE
-    sed -i \"s|'port' => .*,|'port' => 3306,|\"             \$FILE
-    sed -i \"s|'user' => '.*'|'user' => '${DB_LAN_USER}'|\" \$FILE
-    sed -i \"s|'pass' => '.*'|'pass' => '${DB_LAN_PASS}'|\" \$FILE
-    sed -i \"s|'clientConnectionHost' => '.*'|'clientConnectionHost' => '${GAME_IP}'|\" \$FILE
+    php <<'PHP'
+<?php
+\$file = '/var/www/html/config/config-protected.local.php';
+\$config = is_file(\$file) ? require \$file : [];
+if (!is_array(\$config)) {
+    \$config = [];
+}
+
+\$config['db'] = array_merge(
+    is_array(\$config['db'] ?? null) ? \$config['db'] : [],
+    [
+        'host' => '${DB_IP_PHP}',
+        'port' => 3306,
+        'user' => '${DB_LAN_USER_PHP}',
+        'pass' => '${DB_LAN_PASS_PHP}',
+    ]
+);
+\$config['clientConnectionHost'] = '${GAME_IP_PHP}';
+\$config['serviceDefaults'] = array_merge(
+    is_array(\$config['serviceDefaults'] ?? null) ? \$config['serviceDefaults'] : [],
+    [
+        'soap' => array_merge(
+            is_array(\$config['serviceDefaults']['soap'] ?? null) ? \$config['serviceDefaults']['soap'] : [],
+            [
+                'port' => ${SOAP_PORT},
+            ]
+        ),
+    ]
+);
+\$config['realmRuntime'] = array_merge(
+    is_array(\$config['realmRuntime'] ?? null) ? \$config['realmRuntime'] : [],
+    [
+        'default_realm_id' => ${DEFAULT_REALM_ID},
+        'multirealm' => ${MULTIREALM_FLAG},
+    ]
+);
+\$config['realmDbMap'] = ${REALM_MAP_PHP};
+\$config['enabledRealmIds'] = ${ENABLED_REALM_IDS_PHP};
+
+\$content = \"<?php\\n\\nreturn \" . var_export(\$config, true) . \";\\n\";
+file_put_contents(\$file, \$content);
+PHP
+    chown www-data:www-data \$FILE
   "
 
   echo "Web config updated — Bookmark website at http://${WEB_IP}"
