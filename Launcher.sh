@@ -3,6 +3,7 @@ set -euo pipefail
 trap 'echo "ERROR at line $LINENO: $BASH_COMMAND" >&2' ERR
 DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_LAUNCHER_VERSION="22"
 
 # -------------------------
 # First Run Bootstrap
@@ -43,6 +44,7 @@ normalize_config_env() {
 
   # Canonical install-path ordering is owned by the launcher and must survive old configs.
   set_or_append_config_line "ALLOWED_EXPANSIONS" '("classic" "tbc" "wotlk" "vmangos")'
+  set_or_append_config_line "LAUNCHER_VERSION" "\"${DEFAULT_LAUNCHER_VERSION}\""
 
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_CORE_VERSION" '1'
@@ -169,6 +171,7 @@ if [[ ! -f $CONFIG_FILE ]]; then
   cat <<EOF > "$CONFIG_FILE"
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 INSTALLED_EXPANSIONS=()
+LAUNCHER_VERSION="$DEFAULT_LAUNCHER_VERSION"
 AUTO_START="0"
 ASV="Off"
 
@@ -266,6 +269,7 @@ source "$CONFIG_FILE"
 
 # Keep install-path ordering canonical even if an older config.env exists.
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
+LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
 
 DB_CTID="${DB_CTID:-}"
 WEB_CTID="${WEB_CTID:-}"
@@ -1031,6 +1035,7 @@ print_banner() {
   local EXP="${EXPANSION:-main}"
   local COLOR LOGO
   local CLEAR="\e[0m"
+  local BANNER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
 
   case "$EXP" in
     tbc)
@@ -1067,7 +1072,7 @@ print_banner() {
   / ___||  _ \|  _ \\
   \___ \| |_) | |_) |
    ___) |  __/|  __/
-  |____/|_|   |_|roxmox v.21
+  |____/|_|   |_|roxmox v.${BANNER_VERSION}
 "
       ;;
   esac
