@@ -3054,18 +3054,34 @@ install_world() {
       set -euo pipefail
       export MYSQL_PWD='${DB_LAN_PASS}'
       ASSET_BASE='/opt/spp-assets/vmangos/sql'
+      SQL_BASE='/opt/source/sql'
       TMP_DIR='/tmp/vmangos-sql'
       mkdir -p \"\$TMP_DIR\"
+      rm -rf \"\$TMP_DIR/extracted\"
+      mkdir -p \"\$TMP_DIR/extracted\"
 
       WORLD_SQL=''
       if [[ -f \"\$ASSET_BASE/world.sql\" ]]; then
         WORLD_SQL=\"\$ASSET_BASE/world.sql\"
       elif [[ -f \"\$ASSET_BASE/world.7z\" ]]; then
         rm -f \"\$TMP_DIR/world.sql\"
-        7z x -y \"\$ASSET_BASE/world.7z\" -o\"\$TMP_DIR\" >/dev/null
-        WORLD_SQL=\"\$TMP_DIR/world.sql\"
+        7z x -y \"\$ASSET_BASE/world.7z\" -o\"\$TMP_DIR/extracted\" >/dev/null
+        WORLD_SQL=\$(find \"\$TMP_DIR/extracted\" -maxdepth 2 -type f -name '*.sql' | sort | head -n1)
       else
-        echo 'Missing /opt/spp-assets/vmangos/sql/world.sql or world.7z'
+        mapfile -t WORLD_SQL_CANDIDATES < <(find \"\$ASSET_BASE\" -maxdepth 1 -type f \\( -name 'world*.sql' -o -name '*world*.sql' \\) | sort)
+        mapfile -t WORLD_ARCHIVE_CANDIDATES < <(find \"\$ASSET_BASE\" -maxdepth 1 -type f \\( -name 'world*.7z' -o -name '*world*.7z' \\) | sort)
+
+        if (( \${#WORLD_SQL_CANDIDATES[@]} > 0 )); then
+          WORLD_SQL=\"\${WORLD_SQL_CANDIDATES[-1]}\"
+        elif (( \${#WORLD_ARCHIVE_CANDIDATES[@]} > 0 )); then
+          WORLD_ARCHIVE=\"\${WORLD_ARCHIVE_CANDIDATES[-1]}\"
+          7z x -y \"\$WORLD_ARCHIVE\" -o\"\$TMP_DIR/extracted\" >/dev/null
+          WORLD_SQL=\$(find \"\$TMP_DIR/extracted\" -maxdepth 2 -type f -name '*.sql' | sort | head -n1)
+        fi
+      fi
+
+      if [[ -z \"\$WORLD_SQL\" || ! -f \"\$WORLD_SQL\" ]]; then
+        echo 'Missing vMaNGOS world DB asset. Stage world.sql, world.7z, or a world_full*.7z release in /opt/spp-assets/vmangos/sql.'
         exit 1
       fi
 
@@ -3074,6 +3090,10 @@ install_world() {
         CREATE DATABASE ${WORLD_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
       mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$WORLD_SQL\"
+
+      for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_world.sql' | sort); do
+        mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"
+      done
 
       for f in \"\$ASSET_BASE/world\"/*.sql; do
         [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"

@@ -53,6 +53,7 @@ Status: `Confirmed`
 - Proxmox `pct` operations remain target-side only, so direct launcher execution still belongs on the Proxmox host.
 - A Debian 13 WSL full build now succeeds locally after source/CMake portability fixes in the vmangos workspace.
 - The intended Proxmox host for this lane is `ser8`; an exploratory target-side validation was accidentally run on `m1pro` first.
+- A launcher-managed vmangos core rebuild/install has now completed successfully on `ser8`, including install into `/srv/vmangos` and config deployment.
 - For runtime validation that does not use a launcher-managed DB container, the operator-provided external DB endpoint is `192.168.1.47:3306` with `mangos` / `mangos`.
 - The launcher now supports vmangos-specific external DB targeting through `VMANGOS_DB_HOST` and `VMANGOS_DB_PORT` in `config.env`, with fallback to the DB CT only when those are unset.
 
@@ -77,6 +78,7 @@ Status: `Confirmed`
 - A durable Unix-side CMake compatibility fix is to provide a `zlib` compatibility target that forwards to `ZLIB::ZLIB`, so leaked bare `zlib` links do not become `-lzlib` on Linux.
 - The launcher's original vmangos inline patch helpers were too narrow for a fresh-clone Linux build. A deterministic patch-stack approach is more reliable than accumulating ad hoc `perl` edits.
 - The launcher vmangos DB install/config path also needed external-DB support; vmangos now resolves DB host/port from `VMANGOS_DB_HOST` / `VMANGOS_DB_PORT` before falling back to `DB_CTID`.
+- Per the upstream setup guide, the vMaNGOS world DB is not seeded from the core repo alone; it comes from a separate world database release, then receives repo-side `sql/migrations/*_world.sql` updates.
 - On `m1pro`, there was no pre-existing launcher checkout or vmangos container to reuse; the target-side validation path started from a fresh Debian 13 LXC.
 - A temporary Debian 13 LXC on `m1pro` (`CT 490`, hostname `spp-vmangos-test`) successfully configured and then built `mangosd` and `realmd` from a fresh clone when the exact WSL fix set was applied.
 - The `m1pro` validation is useful proof that the fix set works in Proxmox/LXC, but `ser8` remains the intended host for continued operator-driven validation.
@@ -96,17 +98,17 @@ Status: `Confirmed`
 
 Status: `Blocked`
 
-### Launcher workflow parity not yet validated
+### Launcher workflow parity now proven for core build/install
 
-- Observed symptom: the vmangos source now builds in Debian 13 WSL, but the equivalent launcher-managed flow has not yet been rerun end-to-end with these fixes.
-- Current hypothesis: the launcher can own this reliably if it treats `/opt/source` as a launcher-managed checkout, resets it to the tracked branch head, and reapplies a stored vmangos patch stack before each build.
-- Next action: run the updated launcher vmangos test-build/install path on `ser8` and capture the exact command/log output.
+- Observed symptom: the updated launcher-managed vmangos flow now completes the core build/install path on `ser8`.
+- Current hypothesis: remaining parity work is now in DB/data/runtime handling rather than source compilation.
+- Next action: keep the launcher source/patch flow as-is and focus follow-up changes on vmangos database/data staging.
 
 ### Proxmox/LXC validation still pending
 
-- Observed symptom: a proof build succeeded in a temporary Debian 13 LXC on `m1pro`, but the intended `ser8` operator path has not been rerun yet.
-- Current hypothesis: `ser8` should now be able to reproduce the same result with the updated launcher patch-stack flow, and runtime wiring should use the new vmangos external DB config keys when targeting the operator DB host.
-- Next action: rerun on `ser8`, set `VMANGOS_DB_HOST` / `VMANGOS_DB_PORT` in `config.env`, then validate DB/runtime against the external DB host if a launcher-managed DB container is not part of that test.
+- Observed symptom: the launcher-managed core install now succeeds on `ser8`, but vmangos DB install failed because the launcher only looked for `/opt/spp-assets/vmangos/sql/world.sql` or `world.7z`.
+- Current hypothesis: `ser8` needs a staged vMaNGOS world database release from the separate database repo, and the launcher should accept broader release naming such as `world_full_*.7z` before applying repo migrations.
+- Next action: update the launcher vmangos world installer to accept staged world release archives/files with vmangos-style naming, then rerun DB/runtime validation against the external DB host.
 
 ### MariaDB/MySQL compatibility warning still needs separate review
 
@@ -147,11 +149,12 @@ Status: `Next`
 
 1. Record the confirmed WSL success path and exact fix set in this control doc.
 2. Reflect any durable build assumptions needed by the launcher vmangos flow.
-3. Validate the equivalent build/install path on `ser8` using the updated launcher patch stack.
-4. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
-5. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
-6. Set `VMANGOS_DB_HOST` / `VMANGOS_DB_PORT` in `config.env` when using the external DB host instead of a DB CT.
-7. Validate runtime basics against the intended DB target (`192.168.1.47:3306`) if the test path is using the external DB host instead of a DB CT.
+3. Update the vmangos DB installer to accept a staged external world DB release and apply repo-side `*_world.sql` migrations after import.
+4. Set `VMANGOS_DB_HOST` / `VMANGOS_DB_PORT` in `config.env` when using the external DB host instead of a DB CT.
+5. Validate DB import on `ser8` against the intended DB target (`192.168.1.47:3306`).
+6. Validate runtime basics after DB/data install succeeds.
+7. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
+8. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
 
 ## Handoff Notes
 
@@ -167,12 +170,12 @@ Status: `Confirmed`
   - `VMANGOS_DB_HOST`
   - `VMANGOS_DB_PORT`
 - Most useful logs to capture next:
-  - launcher vmangos build/install output on `ser8` after these source fixes
-  - first `ser8` target-side failure, if any remain
+  - first `ser8` target-side DB import failure, including which vmangos world asset name/path was staged
   - any runtime/load errors after successful install against the chosen DB target
 - Next-agent handoff focus:
-  - confirm the current `ser8` vmangos build outcome
-  - if build succeeds, set `VMANGOS_DB_HOST="192.168.1.47"` and `VMANGOS_DB_PORT="3306"` in `config.env`
+  - treat the `ser8` core build/install as confirmed green
+  - set `VMANGOS_DB_HOST="192.168.1.47"` and `VMANGOS_DB_PORT="3306"` in `config.env` if not already set
+  - ensure `/opt/spp-assets/vmangos/sql/` contains a staged vMaNGOS world DB release from the separate database repo
   - run vmangos DB install/runtime validation against the external DB host
   - record exact commands, failures, and runtime observations back into this file
 - Treat Linux case sensitivity and Linux portability issues as first-class concerns; do not assume Windows path behavior is safe.
