@@ -1999,7 +1999,7 @@ service_menu() {
     echo
     echo "6 - Autostart Status: ($ASV)"
 	echo "7 - Server Info"
-    echo "0 - Expansion Select"
+    echo "0 - Back to Launcher"
     echo
 
     read -p "Selection: " MAIN
