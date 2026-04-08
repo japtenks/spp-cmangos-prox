@@ -1151,6 +1151,7 @@ print_banner() {
   local BANNER_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
   local WEBSITE_BRANCH="${WEBSITE_GIT_BRANCH:-unknown}"
   local WEBSITE_COMMIT="${WEBSITE_GIT_COMMIT:-unknown}"
+  local WEBSITE_DATE="${WEBSITE_GIT_DATE:-unknown}"
 
   case "$EXP" in
     tbc)
@@ -1199,7 +1200,7 @@ print_banner() {
   echo "########################################"
   echo -e "$LOGO"
   echo "Launcher Git: ${BANNER_BRANCH}@${BANNER_COMMIT}"
-  echo "SPP-Web Git: ${WEBSITE_BRANCH}@${WEBSITE_COMMIT}"
+  echo "SPP-Web Git: ${WEBSITE_BRANCH}@${WEBSITE_COMMIT} (${WEBSITE_DATE})"
   echo -e "$CLEAR"
 }
 
