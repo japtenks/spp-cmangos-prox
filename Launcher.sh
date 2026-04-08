@@ -8,6 +8,8 @@ DRY_RUN=0
 # -------------------------
 CONFIG_FILE="./config.env"
 declare -A GAME_CTIDS
+WEBSITE_REPO="https://github.com/japtenks/SPP-Web.git"
+WEBSITE_SRC_DIR="/opt/SPP-Web"
 
 auto_detect_stack() {
   local _pct
@@ -1422,10 +1424,10 @@ update_config_protected() {
 
   pct exec "$WEB_CTID" -- bash -c "
     set -e
-    if [ ! -d /opt/SPP-Armory-Website ]; then
-      git clone https://github.com/japtenks/SPP-Armory-Website /opt/SPP-Armory-Website
+    if [ ! -d '$WEBSITE_SRC_DIR' ]; then
+      git clone '$WEBSITE_REPO' '$WEBSITE_SRC_DIR'
     fi
-    cd /opt/SPP-Armory-Website
+    cd '$WEBSITE_SRC_DIR'
     git fetch --depth 1 origin
     git reset --hard origin/HEAD
     cp -f config/config-protected.php /var/www/html/config/config-protected.php
@@ -1461,7 +1463,7 @@ install_website() {
   pct exec "$WEB_CTID" -- bash -c "
     set -e
     rm -rf /var/www/html
-    git clone --depth 1 https://github.com/japtenks/SPP-Armory-Website.git /var/www/html
+    git clone --depth 1 '$WEBSITE_REPO' /var/www/html
     chown -R www-data:www-data /var/www/html
     chmod -R 755 /var/www/html
   "
@@ -1532,10 +1534,10 @@ update_website() {
 
   pct exec "$WEB_CTID" -- bash -c "
     set -e
-    if [ ! -d /opt/SPP-Armory-Website ]; then
-      git clone https://github.com/japtenks/SPP-Armory-Website /opt/SPP-Armory-Website
+    if [ ! -d '$WEBSITE_SRC_DIR' ]; then
+      git clone '$WEBSITE_REPO' '$WEBSITE_SRC_DIR'
     fi
-    cd /opt/SPP-Armory-Website
+    cd '$WEBSITE_SRC_DIR'
     git fetch origin
     git reset --hard origin/HEAD
 
