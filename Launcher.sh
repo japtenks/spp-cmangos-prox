@@ -45,6 +45,8 @@ normalize_config_env() {
   # Canonical install-path ordering is owned by the launcher and must survive old configs.
   set_or_append_config_line "ALLOWED_EXPANSIONS" '("classic" "tbc" "wotlk" "vmangos")'
   set_or_append_config_line "LAUNCHER_VERSION" "\"${DEFAULT_LAUNCHER_VERSION}\""
+  append_config_default_line "LAUNCHER_GIT_BRANCH" '"unknown"'
+  append_config_default_line "LAUNCHER_GIT_COMMIT" '"unknown"'
 
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_CORE_VERSION" '1'
@@ -57,6 +59,22 @@ normalize_config_env() {
   append_config_default_line "VMANGOS_MAPS_VERSION" '1'
   append_config_default_line "MASTER_EXPANSION" '""'
   append_config_default_line "MASTER_REALMD_DB" '""'
+}
+
+refresh_launcher_git_tracking() {
+  local branch="unknown"
+  local commit="unknown"
+
+  if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    commit=$(git -C "$SCRIPT_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+  fi
+
+  set_or_append_config_line "LAUNCHER_GIT_BRANCH" "\"${branch}\""
+  set_or_append_config_line "LAUNCHER_GIT_COMMIT" "\"${commit}\""
+
+  LAUNCHER_GIT_BRANCH="$branch"
+  LAUNCHER_GIT_COMMIT="$commit"
 }
 
 auto_detect_stack() {
@@ -172,6 +190,8 @@ if [[ ! -f $CONFIG_FILE ]]; then
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 INSTALLED_EXPANSIONS=()
 LAUNCHER_VERSION="$DEFAULT_LAUNCHER_VERSION"
+LAUNCHER_GIT_BRANCH="unknown"
+LAUNCHER_GIT_COMMIT="unknown"
 AUTO_START="0"
 ASV="Off"
 
@@ -270,6 +290,9 @@ source "$CONFIG_FILE"
 # Keep install-path ordering canonical even if an older config.env exists.
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
+LAUNCHER_GIT_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
+LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
+refresh_launcher_git_tracking
 
 DB_CTID="${DB_CTID:-}"
 WEB_CTID="${WEB_CTID:-}"
@@ -1036,6 +1059,8 @@ print_banner() {
   local COLOR LOGO
   local CLEAR="\e[0m"
   local BANNER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
+  local BANNER_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
+  local BANNER_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
 
   case "$EXP" in
     tbc)
@@ -1083,6 +1108,7 @@ print_banner() {
   echo "# SPP - ${EXP^}"
   echo "########################################"
   echo -e "$LOGO"
+  echo "Launcher: v.${BANNER_VERSION} (${BANNER_BRANCH}@${BANNER_COMMIT})"
   echo -e "$CLEAR"
 }
 
