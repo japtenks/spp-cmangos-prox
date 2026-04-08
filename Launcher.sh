@@ -118,12 +118,6 @@ refresh_website_git_tracking() {
   WEBSITE_SRC_GIT_DATE="$src_commit_date"
 }
 
-website_update_pending() {
-  [[ -n "${WEBSITE_GIT_COMMIT:-}" && -n "${WEBSITE_SRC_GIT_COMMIT:-}" ]] || return 1
-  [[ "${WEBSITE_GIT_COMMIT}" != "unknown" && "${WEBSITE_SRC_GIT_COMMIT}" != "unknown" ]] || return 1
-  [[ "${WEBSITE_GIT_COMMIT}" != "${WEBSITE_SRC_GIT_COMMIT}" ]]
-}
-
 update_launcher_self() {
   echo
   echo "Updating launcher from git..."
@@ -1157,6 +1151,8 @@ print_banner() {
   local BANNER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
   local BANNER_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
   local BANNER_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
+  local WEBSITE_BRANCH="${WEBSITE_GIT_BRANCH:-unknown}"
+  local WEBSITE_COMMIT="${WEBSITE_GIT_COMMIT:-unknown}"
 
   case "$EXP" in
     tbc)
@@ -1205,6 +1201,7 @@ print_banner() {
   echo "########################################"
   echo -e "$LOGO"
   echo "Launcher Git: ${BANNER_BRANCH}@${BANNER_COMMIT}"
+  echo "SPP-Web Git: ${WEBSITE_BRANCH}@${WEBSITE_COMMIT}"
   echo -e "$CLEAR"
 }
 
@@ -1338,15 +1335,10 @@ main() {
   done
 }
 expansion_menu() {
-  local RED="\e[31m"
-  local RESET="\e[0m"
-  local SHARED_LABEL="M - Shared Services"
-
   while true; do
     clear
     print_banner
     auto_detect_stack
-    refresh_website_git_tracking
 
     echo "Choose Install Path:"
     echo
@@ -1365,11 +1357,7 @@ expansion_menu() {
       echo
     done
 
-    if website_update_pending; then
-      echo -e "${RED}${SHARED_LABEL}${RESET}"
-    else
-      echo "$SHARED_LABEL"
-    fi
+    echo "M - Shared Services"
     echo "0 - Exit"
     echo
 
@@ -1393,11 +1381,7 @@ expansion_menu() {
 
 	
 shared_services_menu() {
-  local RED="\e[31m"
-  local RESET="\e[0m"
-  local WEBSITE_LABEL="3 - Website"
   auto_detect_stack
-  refresh_website_git_tracking
 
   while true; do
     print_banner
@@ -1407,11 +1391,7 @@ shared_services_menu() {
     echo
     echo "1 - Status"
     echo "2 - Service Control"
-    if website_update_pending; then
-      echo -e "${RED}${WEBSITE_LABEL}${RESET}"
-    else
-      echo "$WEBSITE_LABEL"
-    fi
+    echo "3 - Website"
     echo "4 - Repo"
     echo "5 - Configuration"
     echo "6 - Update Launcher"
@@ -1833,9 +1813,6 @@ deploy_realmd() {
 }
 
 shared_website_menu() {
-  local RED="\e[31m"
-  local RESET="\e[0m"
-  local UPDATE_LABEL="2 - Update Website"
   auto_detect_stack
   refresh_website_git_tracking
   echo
@@ -1847,11 +1824,7 @@ shared_website_menu() {
   fi
   echo
   echo "1 - Install Website"
-  if website_update_pending; then
-    echo -e "${RED}${UPDATE_LABEL}${RESET}"
-  else
-    echo "$UPDATE_LABEL"
-  fi
+  echo "2 - Update Website"
   echo "3 - Align php for website db"
   echo "4 - Refresh local website config"
   echo
