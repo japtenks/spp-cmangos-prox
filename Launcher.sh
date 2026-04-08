@@ -2398,6 +2398,23 @@ patch_vmangos_mariadb_compat() {
   "
 }
 
+patch_vmangos_linux_portability() {
+  is_vmangos || return 0
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    files=(
+      '/opt/source/src/game/PlayerBots/playerbot/PlayerbotAI.cpp'
+      '/opt/source/src/game/PlayerBots/playerbot/strategy/actions/SayAction.cpp'
+    )
+
+    for target in \"\${files[@]}\"; do
+      [[ -f \"\$target\" ]] || continue
+      perl -0pi -e 's/_strnicmp\\(/strnicmp(/g; s/_stricmp\\(/stricmp(/g' \"\$target\"
+    done
+  "
+}
+
 test_build_vmangos() {
   is_vmangos || return 1
   derive_db_names || return 1
@@ -2427,6 +2444,7 @@ test_build_vmangos() {
 
   normalize_vmangos_playerbots_case
   patch_vmangos_mariadb_compat
+  patch_vmangos_linux_portability
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -2472,6 +2490,7 @@ comp_server() {
 
     normalize_vmangos_playerbots_case
     patch_vmangos_mariadb_compat
+    patch_vmangos_linux_portability
 
     pct exec "$GAME_CTID" -- bash -c "
       set -e
@@ -2631,6 +2650,7 @@ update_core() {
 
     normalize_vmangos_playerbots_case
     patch_vmangos_mariadb_compat
+    patch_vmangos_linux_portability
 
     local NEW_CORE
     NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
