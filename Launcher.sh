@@ -1108,7 +1108,7 @@ print_banner() {
   echo "# SPP - ${EXP^}"
   echo "########################################"
   echo -e "$LOGO"
-  echo "Launcher: v.${BANNER_VERSION} (${BANNER_BRANCH}@${BANNER_COMMIT})"
+  echo "Launcher Git: ${BANNER_BRANCH}@${BANNER_COMMIT}"
   echo -e "$CLEAR"
 }
 
@@ -1237,7 +1237,7 @@ main() {
 
   while true; do
   
-    expansion_menu
+    service_menu
   done
 }
 expansion_menu() {
