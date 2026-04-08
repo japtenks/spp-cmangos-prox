@@ -48,8 +48,12 @@ Status: `Confirmed`
 - The vmangos target repo is `https://github.com/ileboii/core.git`.
 - The vmangos target branch is `vmangos-ike3-playerbots`.
 - The Debian 13 WSL workspace is `/root/src/vmangos-core`.
+- The current tested vmangos branch head is `dbc360623b53a4d6bec1db9034bf54008715b152`.
 - The Windows launcher repo path is `C:\Git\spp-cmangos-prox`.
 - Proxmox `pct` operations remain target-side only, so direct launcher execution still belongs on the Proxmox host.
+- A Debian 13 WSL full build now succeeds locally after source/CMake portability fixes in the vmangos workspace.
+- The intended Proxmox host for this lane is `ser8`; an exploratory target-side validation was accidentally run on `m1pro` first.
+- For runtime validation that does not use a launcher-managed DB container, the operator-provided external DB endpoint is `192.168.1.47:3306` with `mangos` / `mangos`.
 
 ## Confirmed Findings
 
@@ -60,6 +64,20 @@ Status: `Confirmed`
 - MariaDB/MySQL compatibility handling in `src/shared/Database/DatabaseMysql.h` is relevant to this fork on modern Linux toolchains.
 - Windows-only `_strnicmp` usage in PlayerBots sources breaks Linux compilation.
 - Debian 13 WSL reproduces the same meaningful Linux-side build issues seen in the Proxmox path, so it is a valid debugging environment.
+- The vmangos fork branch is a small fork layer over upstream `development`, not a large unrelated codebase:
+  - merge-base with upstream `development`: `8c9bcf6ee795a16fa5b53e55aa94b07396b48adc`
+  - fork branch ahead of base: `12` commits
+  - upstream ahead after fetch: `1` commit
+- The reproduced Linux blocker chain on Debian 13 WSL was:
+  - Linux case-sensitive `PlayerBots` vs `Playerbots` CMake path mismatch
+  - Windows-only `_strnicmp` usage in PlayerBots sources
+  - several fork-port typos/stub breakpoints in PlayerBots (`const const`, outdated constructor call, `!nullptr` placeholders)
+  - Unix link failure in `mangosd` from stray `-lzlib`
+- A durable Unix-side CMake compatibility fix is to provide a `zlib` compatibility target that forwards to `ZLIB::ZLIB`, so leaked bare `zlib` links do not become `-lzlib` on Linux.
+- The launcher's original vmangos inline patch helpers were too narrow for a fresh-clone Linux build. A deterministic patch-stack approach is more reliable than accumulating ad hoc `perl` edits.
+- On `m1pro`, there was no pre-existing launcher checkout or vmangos container to reuse; the target-side validation path started from a fresh Debian 13 LXC.
+- A temporary Debian 13 LXC on `m1pro` (`CT 490`, hostname `spp-vmangos-test`) successfully configured and then built `mangosd` and `realmd` from a fresh clone when the exact WSL fix set was applied.
+- The `m1pro` validation is useful proof that the fix set works in Proxmox/LXC, but `ser8` remains the intended host for continued operator-driven validation.
 
 ## Working Decisions
 
@@ -76,23 +94,23 @@ Status: `Confirmed`
 
 Status: `Blocked`
 
-### Case-sensitive PlayerBots path mismatch
+### Launcher workflow parity not yet validated
 
-- Observed symptom: CMake fails because `add_subdirectory(Playerbots)` does not resolve on Linux.
-- Current hypothesis: the fork was developed with Windows-tolerant casing assumptions.
-- Next action: normalize the source tree or patch the CMake expectation in the Debian 13 WSL test workspace, then port the durable fix into launcher automation.
+- Observed symptom: the vmangos source now builds in Debian 13 WSL, but the equivalent launcher-managed flow has not yet been rerun end-to-end with these fixes.
+- Current hypothesis: the launcher can own this reliably if it treats `/opt/source` as a launcher-managed checkout, resets it to the tracked branch head, and reapplies a stored vmangos patch stack before each build.
+- Next action: run the updated launcher vmangos test-build/install path on `ser8` and capture the exact command/log output.
 
-### Windows-only string compare usage
+### Proxmox/LXC validation still pending
 
-- Observed symptom: vmangos build fails in `PlayerbotAI.cpp` because `_strnicmp` is not defined on Linux.
-- Current hypothesis: the fork contains Windows-specific string helpers that were not normalized to the portable aliases already used elsewhere in the codebase.
-- Next action: patch Linux portability in the WSL workspace, rerun the build, and then reflect the same fix in the launcher workflow if the source remains unchanged upstream.
+- Observed symptom: a proof build succeeded in a temporary Debian 13 LXC on `m1pro`, but the intended `ser8` operator path has not been rerun yet.
+- Current hypothesis: `ser8` should now be able to reproduce the same result with the updated launcher patch-stack flow, though DB/runtime wiring still needs confirmation against the operator's external DB host.
+- Next action: rerun on `ser8`, then point runtime validation at `192.168.1.47:3306` if a launcher-managed DB container is not part of that test.
 
-### Additional Linux portability issues likely to follow
+### MariaDB/MySQL compatibility warning still needs separate review
 
-- Observed symptom: current evidence shows this new fork compiles with many warnings and has already exposed multiple Linux-only breakpoints.
-- Current hypothesis: more portability issues are likely once the current blockers are removed.
-- Next action: continue iterative Debian 13 WSL build-debug cycles and record only confirmed blockers here.
+- Observed symptom: builds still emit the existing `DatabaseMysql.h` warning about an incompatible mysql version.
+- Current hypothesis: this warning is not blocking the Linux build, but the compatibility handling remains worth auditing separately on modern Debian/Proxmox targets.
+- Next action: treat this as a follow-up compatibility lane rather than a blocker now that the full WSL build succeeds.
 
 ## Master/Sub-Agent Use
 
@@ -125,12 +143,12 @@ Use the master/sub-agent split when:
 
 Status: `Next`
 
-1. Reproduce the current blocker in Debian 13 WSL.
-2. Fix the current source/build issue in the WSL workspace.
-3. Rerun the local Debian build.
-4. Reflect the durable fix into the launcher flow.
-5. Validate the equivalent behavior on Proxmox/LXC.
-6. Commit once the build path is stable.
+1. Record the confirmed WSL success path and exact fix set in this control doc.
+2. Reflect any durable build assumptions needed by the launcher vmangos flow.
+3. Validate the equivalent build/install path on `ser8` using the updated launcher patch stack.
+4. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
+5. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
+6. Validate runtime basics against the intended DB target (`192.168.1.47:3306`) if the test path is using the external DB host instead of a DB CT.
 
 ## Handoff Notes
 
@@ -140,8 +158,14 @@ Status: `Confirmed`
 - Debian 13 WSL vmangos workspace: `/root/src/vmangos-core`
 - Use Debian 13 WSL for direct Linux build/debug, not Windows shell assumptions.
 - Use Proxmox only for target validation and launcher-runtime confirmation.
+- Intended Proxmox host going forward: `ser8`
+- `m1pro` already has a temporary proof container: `CT 490` / `spp-vmangos-test` with a successful vmangos binary build and current sizing of `4 vCPU`, `8 GiB RAM`, `16 GiB rootfs`.
 - Most useful logs to capture next:
-  - first `error:` line from the Debian 13 WSL build
-  - final `make: ***` lines if the build stops
-  - any CMake configure failure block
+  - launcher vmangos build/install output on `ser8` after these source fixes
+  - first `ser8` target-side failure, if any remain
+  - any runtime/load errors after successful install against the chosen DB target
 - Treat Linux case sensitivity and Linux portability issues as first-class concerns; do not assume Windows path behavior is safe.
+- Preserve the distinction between:
+  - true Linux portability fixes
+  - obvious fork-port typos
+  - intentional vMaNGOS stubs where CMaNGOS bot subsystems do not exist yet

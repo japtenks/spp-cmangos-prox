@@ -2374,44 +2374,33 @@ ensure_vmangos_build_deps() {
   "
 }
 
-normalize_vmangos_playerbots_case() {
+apply_vmangos_build_fix_patch() {
   is_vmangos || return 0
+
+  local HOST_PATCH="${SCRIPT_DIR}/patches/vmangos/0001-vmangos-ike3-playerbots-build-fixes.patch"
+  local CT_PATCH="/opt/spp-patches/vmangos/0001-vmangos-ike3-playerbots-build-fixes.patch"
+
+  [[ -f "$HOST_PATCH" ]] || {
+    echo "Missing vMaNGOS build-fix patch: $HOST_PATCH"
+    return 1
+  }
+
+  pct exec "$GAME_CTID" -- mkdir -p /opt/spp-patches/vmangos
+  pct push "$GAME_CTID" "$HOST_PATCH" "$CT_PATCH"
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
-    GAME_SRC='/opt/source/src/game'
-    if [[ -d \"\$GAME_SRC/PlayerBots\" && ! -e \"\$GAME_SRC/Playerbots\" ]]; then
-      ln -s PlayerBots \"\$GAME_SRC/Playerbots\"
+    cd /opt/source
+    patch_file='$CT_PATCH'
+
+    if git apply --reverse --check \"\$patch_file\" >/dev/null 2>&1; then
+      echo 'vMaNGOS build fix patch already applied.'
+      exit 0
     fi
-  "
-}
 
-patch_vmangos_mariadb_compat() {
-  is_vmangos || return 0
-
-  pct exec "$GAME_CTID" -- bash -c "
-    set -e
-    target='/opt/source/src/shared/Database/DatabaseMysql.h'
-    if [[ -f \"\$target\" ]]; then
-      perl -0pi -e 's/#if MYSQL_VERSION_ID >= 80000/#if MYSQL_VERSION_ID >= 80000 \\&\\& !defined(MARIADB_BASE_VERSION) \\&\\& !defined(MARIADB_VERSION_ID)/' \"\$target\"
-    fi
-  "
-}
-
-patch_vmangos_linux_portability() {
-  is_vmangos || return 0
-
-  pct exec "$GAME_CTID" -- bash -c "
-    set -e
-    files=(
-      '/opt/source/src/game/PlayerBots/playerbot/PlayerbotAI.cpp'
-      '/opt/source/src/game/PlayerBots/playerbot/strategy/actions/SayAction.cpp'
-    )
-
-    for target in \"\${files[@]}\"; do
-      [[ -f \"\$target\" ]] || continue
-      perl -0pi -e 's/_strnicmp\\(/strnicmp(/g; s/_stricmp\\(/stricmp(/g' \"\$target\"
-    done
+    git apply --check \"\$patch_file\"
+    git apply \"\$patch_file\"
+    echo 'Applied vMaNGOS build fix patch.'
   "
 }
 
@@ -2428,12 +2417,13 @@ test_build_vmangos() {
     set -e
     cd /opt
 
-    if [[ -d source ]]; then
-      echo 'Updating existing vMaNGOS core for test build...'
+    if [[ -d source/.git ]]; then
+      echo 'Resetting existing vMaNGOS core for test build...'
       cd source
       git fetch origin
       git checkout '$BRANCH'
-      git pull --ff-only origin '$BRANCH'
+      git reset --hard "origin/$BRANCH"
+      git clean -fd
     else
       echo 'Cloning fresh vMaNGOS core for test build...'
       git clone '$REPO' source
@@ -2442,9 +2432,7 @@ test_build_vmangos() {
     fi
   "
 
-  normalize_vmangos_playerbots_case
-  patch_vmangos_mariadb_compat
-  patch_vmangos_linux_portability
+  apply_vmangos_build_fix_patch
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -2474,23 +2462,22 @@ comp_server() {
       set -e
       cd /opt
 
-      if [[ -d source ]]; then
-        echo 'Updating existing vMaNGOS core...'
+      if [[ -d source/.git ]]; then
+        echo 'Resetting existing vMaNGOS core...'
         cd source
         git fetch origin
         git checkout '$BRANCH'
-        git pull --ff-only origin '$BRANCH'
+        git reset --hard "origin/$BRANCH"
+        git clean -fd
       else
         echo 'Cloning fresh vMaNGOS core...'
-      git clone '$REPO' source
-      cd source
-      git checkout '$BRANCH'
-    fi
+        git clone '$REPO' source
+        cd source
+        git checkout '$BRANCH'
+      fi
     "
 
-    normalize_vmangos_playerbots_case
-    patch_vmangos_mariadb_compat
-    patch_vmangos_linux_portability
+    apply_vmangos_build_fix_patch
 
     pct exec "$GAME_CTID" -- bash -c "
       set -e
@@ -2645,17 +2632,16 @@ update_core() {
       cd /opt/source
       git fetch origin
       git checkout '$(expansion_branch "$EXPANSION")'
-      git pull --ff-only origin '$(expansion_branch "$EXPANSION")'
+      git reset --hard 'origin/$(expansion_branch "$EXPANSION")'
+      git clean -fd
     "
 
-    normalize_vmangos_playerbots_case
-    patch_vmangos_mariadb_compat
-    patch_vmangos_linux_portability
+    apply_vmangos_build_fix_patch
 
     local NEW_CORE
     NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
 
-    if [[ "$OLD_CORE" != "$NEW_CORE" ]]; then
+    if [[ "$OLD_CORE" != "$NEW_CORE" ]] || ! pct exec "$GAME_CTID" -- git -C /opt/source diff --quiet --exit-code; then
       echo "Changes detected â€” rebuilding..."
       stop_mangosd_managed "core-rebuild"
 
