@@ -52,6 +52,8 @@ normalize_config_env() {
   append_config_default_line "WEBSITE_GIT_DATE" '"unknown"'
 
   append_config_default_line "IP_VMANGOS" '""'
+  append_config_default_line "VMANGOS_DB_HOST" '""'
+  append_config_default_line "VMANGOS_DB_PORT" '"3306"'
   append_config_default_line "VMANGOS_CORE_VERSION" '1'
   append_config_default_line "VMANGOS_WORLD_VERSION" '1'
   append_config_default_line "VMANGOS_CHARS_VERSION" '1'
@@ -410,7 +412,7 @@ expansion_repo() {
     classic) echo "https://github.com/japtenks/mangos-classic.git" ;;
     tbc) echo "https://github.com/celguar/mangos-tbc.git" ;;
     wotlk) echo "https://github.com/celguar/mangos-wotlk.git" ;;
-    vmangos) echo "https://github.com/ileboii/core.git" ;;
+    vmangos) echo "https://github.com/japtenks/SPP-Vmangos-nix.git" ;;
     *) return 1 ;;
   esac
 }
@@ -418,7 +420,7 @@ expansion_repo() {
 expansion_branch() {
   case "$1" in
     classic|tbc|wotlk) echo "ike3-bots" ;;
-    vmangos) echo "vmangos-ike3-playerbots" ;;
+    vmangos) echo "codex/vmangos-linux-build-fixes" ;;
     *) return 1 ;;
   esac
 }
@@ -832,6 +834,23 @@ derive_db_names() {
     REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
   fi
   REALM_ID=$(expansion_realm_id "$EXPANSION") || return 1
+}
+
+resolve_vmangos_db_endpoint() {
+  if ! is_vmangos; then
+    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+    DB_PORT="3306"
+    return 0
+  fi
+
+  if [[ -n "${VMANGOS_DB_HOST:-}" ]]; then
+    DB_IP="${VMANGOS_DB_HOST}"
+    DB_PORT="${VMANGOS_DB_PORT:-3306}"
+    return 0
+  fi
+
+  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+  DB_PORT="${VMANGOS_DB_PORT:-3306}"
 }
 
 set_config_value() {
@@ -1595,7 +1614,7 @@ update_db_conf() {
   if pct exec "$LOGIN_CTID" -- test -f "${MASTER_INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
     pct exec "$LOGIN_CTID" -- bash -c "
       sed -i \
-      's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+      's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
       ${MASTER_INSTALL_DIR}/etc/realmd.conf
     "
     echo "realmd.conf updated."
@@ -1610,7 +1629,7 @@ update_db_conf() {
 
     pct exec "$LOGIN_CTID" -- bash -c "
       sed -i \
-      's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+      's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
       ${MASTER_INSTALL_DIR}/etc/realmd.conf
     "
     echo "realmd.conf updated."
@@ -1632,10 +1651,10 @@ update_db_conf() {
     pct exec "$GAME_CTID" -- bash -c "
       if [[ '$EXP' == 'vmangos' ]]; then
         sed -i \
-        -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
-        -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
-        -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
-        -e 's|^LogsDatabase\.Info *=.*|LogsDatabase.Info               = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+        -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+        -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+        -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+        -e 's|^LogsDatabase\.Info *=.*|LogsDatabase.Info               = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
         ${INSTALL_DIR}/etc/mangosd.conf
       else
         sed -i \
@@ -3029,8 +3048,7 @@ install_world() {
   echo "Installing world DB..."
 
   if is_vmangos; then
-    local DB_IP
-    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+    resolve_vmangos_db_endpoint || return 1
 
     if pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
@@ -3051,14 +3069,14 @@ install_world() {
         exit 1
       fi
 
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
         DROP DATABASE IF EXISTS ${WORLD_DB};
         CREATE DATABASE ${WORLD_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$WORLD_SQL\"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$WORLD_SQL\"
 
       for f in \"\$ASSET_BASE/world\"/*.sql; do
-        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"
+        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"
       done
     "; then
       echo "DB installed successfully."
@@ -3118,27 +3136,26 @@ install_char() {
 
     echo "Installing character DB..."
  if is_vmangos; then
-  local DB_IP
-  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+  resolve_vmangos_db_endpoint || return 1
 
   if pct exec "$GAME_CTID" -- bash -c "
     set -euo pipefail
     export MYSQL_PWD='${DB_LAN_PASS}'
     SQL_BASE='/opt/source/sql'
 
-    mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+    mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
       DROP DATABASE IF EXISTS ${CHAR_DB_NAME};
       CREATE DATABASE ${CHAR_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     \"
 
-    mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$SQL_BASE/characters.sql\"
+    mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$SQL_BASE/characters.sql\"
 
     for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_characters.sql' | sort); do
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
     done
 
     for f in /opt/spp-assets/vmangos/sql/characters/*.sql; do
-      [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
+      [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
     done
   "; then
     echo "DB installed successfully."
@@ -3197,23 +3214,22 @@ install_logs() {
   echo "Installing logs DB..."
 
   if is_vmangos; then
-    local DB_IP
-    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+    resolve_vmangos_db_endpoint || return 1
 
     if pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
       export MYSQL_PWD='${DB_LAN_PASS}'
       SQL_BASE='/opt/source/sql'
 
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
         DROP DATABASE IF EXISTS ${LOG_DB_NAME};
         CREATE DATABASE ${LOG_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
 
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$SQL_BASE/logs.sql\"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$SQL_BASE/logs.sql\"
 
       for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logs.sql' | sort); do
-        mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$f\"
+        mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$f\"
       done
     "; then
       echo "Logs DB installed successfully."
@@ -3731,27 +3747,26 @@ install_realm() {
 
   if is_vmangos; then
     echo "Installing realm DB via dedicated vMaNGOS logon flow..."
-    local DB_IP
-    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+    resolve_vmangos_db_endpoint || return 1
 
     if pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
       export MYSQL_PWD='${DB_LAN_PASS}'
       SQL_BASE='/opt/source/sql'
 
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' -e \"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
         DROP DATABASE IF EXISTS ${REALM_DB_NAME};
         CREATE DATABASE ${REALM_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
 
-      mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$SQL_BASE/logon.sql\"
+      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$SQL_BASE/logon.sql\"
 
       for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logon.sql' | sort); do
-        mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
+        mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
       done
 
       for f in /opt/spp-assets/vmangos/sql/logon/*.sql; do
-        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port=3306 --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
+        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
       done
     "; then
       echo "Realm DB installed successfully."
