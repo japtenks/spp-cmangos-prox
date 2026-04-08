@@ -283,8 +283,8 @@ Available after at least one expansion is installed.
 
 **Website**
 - `Install Website` — fresh clone of the armory site, imports DB tables (master expansion only)
-- `Update Website` — git pull + rsync, preserves `config-protected.php`
-- `Align php for website db` — rewrites DB connection settings in `config-protected.php`
+- `Update Website` — git pull + rsync, preserves `config-protected.local.php`
+- `Align php for website db` — rewrites DB connection settings in `config-protected.local.php`
 
 **Repo** — manages the SQL/settings repo sparse checkout on DB and game containers.
 

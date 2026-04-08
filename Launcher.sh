@@ -1405,7 +1405,7 @@ shared_website_menu() {
   echo "1 - Install Website"
   echo "2 - Update Website"
   echo "3 - Align php for website db"
-  echo "4 - Update config-protected.php"
+  echo "4 - Refresh local website config"
   echo
   echo "0 - Back"
 
@@ -1420,7 +1420,7 @@ shared_website_menu() {
 }
 
 update_config_protected() {
-  echo "Pulling latest config-protected.php from repo..."
+  echo "Refreshing local website config template from repo..."
 
   pct exec "$WEB_CTID" -- bash -c "
     set -e
@@ -1430,8 +1430,14 @@ update_config_protected() {
     cd '$WEBSITE_SRC_DIR'
     git fetch --depth 1 origin
     git reset --hard origin/HEAD
-    cp -f config/config-protected.php /var/www/html/config/config-protected.php
-    chown www-data:www-data /var/www/html/config/config-protected.php
+    if [ ! -f /var/www/html/config/config-protected.local.php ]; then
+      if [ -f '$WEBSITE_SRC_DIR/config/config-protected.local.php.example' ]; then
+        cp -f '$WEBSITE_SRC_DIR/config/config-protected.local.php.example' /var/www/html/config/config-protected.local.php
+      else
+        cp -f '$WEBSITE_SRC_DIR/config/config-protected.example.php' /var/www/html/config/config-protected.local.php
+      fi
+      chown www-data:www-data /var/www/html/config/config-protected.local.php
+    fi
   "
 
   echo "Reapplying DB credentials..."
@@ -1542,7 +1548,7 @@ update_website() {
     git reset --hard origin/HEAD
 
     rsync -a --delete \
-      --exclude 'config/config-protected.php' \
+      --exclude 'config/config-protected.local.php' \
       ./ /var/www/html/
 
     chown -R www-data:www-data /var/www/html
@@ -1561,15 +1567,25 @@ web_config() {
 
   local DB_IP
   DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
-    local WEB_IP
+  local WEB_IP
   WEB_IP=$(pct exec "$WEB_CTID" -- hostname -I | awk '{print $1}')
+  local GAME_IP
+  GAME_IP=$(pct exec "$GAME_CTID" -- hostname -I | awk '{print $1}')
 
   pct exec "$WEB_CTID" -- bash -c "
-    FILE=/var/www/html/config/config-protected.php
+    FILE=/var/www/html/config/config-protected.local.php
+    if [ ! -f \$FILE ]; then
+      if [ -f /var/www/html/config/config-protected.local.php.example ]; then
+        cp -f /var/www/html/config/config-protected.local.php.example \$FILE
+      else
+        cp -f /var/www/html/config/config-protected.example.php \$FILE
+      fi
+    fi
     sed -i \"s|'host' => '.*'|'host' => '${DB_IP}'|\"       \$FILE
     sed -i \"s|'port' => .*,|'port' => 3306,|\"             \$FILE
     sed -i \"s|'user' => '.*'|'user' => '${DB_LAN_USER}'|\" \$FILE
     sed -i \"s|'pass' => '.*'|'pass' => '${DB_LAN_PASS}'|\" \$FILE
+    sed -i \"s|'clientConnectionHost' => '.*'|'clientConnectionHost' => '${GAME_IP}'|\" \$FILE
   "
 
   echo "Web config updated — Bookmark website at http://${WEB_IP}"
