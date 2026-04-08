@@ -54,6 +54,7 @@ normalize_config_env() {
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_DB_HOST" '""'
   append_config_default_line "VMANGOS_DB_PORT" '"3306"'
+  append_config_default_line "VMANGOS_WORLD_DB_URL" '"https://github.com/brotalnia/database/raw/master/world_full_14_june_2021.7z"'
   append_config_default_line "VMANGOS_CORE_VERSION" '1'
   append_config_default_line "VMANGOS_WORLD_VERSION" '1'
   append_config_default_line "VMANGOS_CHARS_VERSION" '1'
@@ -300,6 +301,7 @@ IP_CLASSIC="$IP_CLASSIC"
 IP_TBC="$IP_TBC"
 IP_WOTLK="$IP_WOTLK"
 IP_VMANGOS="$IP_VMANGOS"
+VMANGOS_WORLD_DB_URL="${VMANGOS_WORLD_DB_URL:-https://github.com/brotalnia/database/raw/master/world_full_14_june_2021.7z}"
 
 # Version Tracking
 CLASSIC_CORE_VERSION=48
@@ -3056,6 +3058,8 @@ install_world() {
       ASSET_BASE='/opt/spp-assets/vmangos/sql'
       SQL_BASE='/opt/source/sql'
       TMP_DIR='/tmp/vmangos-sql'
+      DEFAULT_WORLD_URL='${VMANGOS_WORLD_DB_URL}'
+      mkdir -p \"\$ASSET_BASE\"
       mkdir -p \"\$TMP_DIR\"
       rm -rf \"\$TMP_DIR/extracted\"
       mkdir -p \"\$TMP_DIR/extracted\"
@@ -3077,11 +3081,25 @@ install_world() {
           WORLD_ARCHIVE=\"\${WORLD_ARCHIVE_CANDIDATES[-1]}\"
           7z x -y \"\$WORLD_ARCHIVE\" -o\"\$TMP_DIR/extracted\" >/dev/null
           WORLD_SQL=\$(find \"\$TMP_DIR/extracted\" -maxdepth 2 -type f -name '*.sql' | sort | head -n1)
+        elif [[ -n \"\$DEFAULT_WORLD_URL\" ]]; then
+          WORLD_ARCHIVE=\"\$ASSET_BASE/\$(basename \"\$DEFAULT_WORLD_URL\")\"
+          if [[ ! -f \"\$WORLD_ARCHIVE\" ]]; then
+            if command -v curl >/dev/null 2>&1; then
+              curl -L --fail --output \"\$WORLD_ARCHIVE\" \"\$DEFAULT_WORLD_URL\"
+            elif command -v wget >/dev/null 2>&1; then
+              wget -O \"\$WORLD_ARCHIVE\" \"\$DEFAULT_WORLD_URL\"
+            else
+              echo 'Missing curl/wget to download default vMaNGOS world DB asset.'
+              exit 1
+            fi
+          fi
+          7z x -y \"\$WORLD_ARCHIVE\" -o\"\$TMP_DIR/extracted\" >/dev/null
+          WORLD_SQL=\$(find \"\$TMP_DIR/extracted\" -maxdepth 2 -type f -name '*.sql' | sort | head -n1)
         fi
       fi
 
       if [[ -z \"\$WORLD_SQL\" || ! -f \"\$WORLD_SQL\" ]]; then
-        echo 'Missing vMaNGOS world DB asset. Stage world.sql, world.7z, or a world_full*.7z release in /opt/spp-assets/vmangos/sql.'
+        echo 'Missing vMaNGOS world DB asset. Stage world.sql, world.7z, or a world_full*.7z release in /opt/spp-assets/vmangos/sql, or set VMANGOS_WORLD_DB_URL to a downloadable archive.'
         exit 1
       fi
 

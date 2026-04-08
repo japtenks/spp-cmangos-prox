@@ -56,6 +56,7 @@ Status: `Confirmed`
 - A launcher-managed vmangos core rebuild/install has now completed successfully on `ser8`, including install into `/srv/vmangos` and config deployment.
 - For runtime validation that does not use a launcher-managed DB container, the operator-provided external DB endpoint is `192.168.1.47:3306` with `mangos` / `mangos`.
 - The launcher now supports vmangos-specific external DB targeting through `VMANGOS_DB_HOST` and `VMANGOS_DB_PORT` in `config.env`, with fallback to the DB CT only when those are unset.
+- The launcher also supports `VMANGOS_WORLD_DB_URL` in `config.env`; when no staged vmangos world asset exists yet, the vmangos world installer can download the configured archive into `/opt/spp-assets/vmangos/sql/` automatically.
 
 ## Confirmed Findings
 
@@ -169,6 +170,7 @@ Status: `Confirmed`
 - New launcher vmangos external DB keys:
   - `VMANGOS_DB_HOST`
   - `VMANGOS_DB_PORT`
+  - `VMANGOS_WORLD_DB_URL`
 - Most useful logs to capture next:
   - first `ser8` target-side DB import failure, including which vmangos world asset name/path was staged
   - any runtime/load errors after successful install against the chosen DB target
