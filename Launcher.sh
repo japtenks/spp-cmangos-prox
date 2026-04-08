@@ -410,7 +410,7 @@ expansion_repo() {
     classic) echo "https://github.com/japtenks/mangos-classic.git" ;;
     tbc) echo "https://github.com/celguar/mangos-tbc.git" ;;
     wotlk) echo "https://github.com/celguar/mangos-wotlk.git" ;;
-    vmangos) echo "https://github.com/vmangos/core.git" ;;
+    vmangos) echo "https://github.com/ileboii/core.git" ;;
     *) return 1 ;;
   esac
 }
@@ -765,7 +765,7 @@ EOF
         libssl-dev libbz2-dev libreadline-dev \
         libcurl4-openssl-dev zlib1g-dev \
         libncurses-dev libmariadb-dev libmariadb-dev-compat \
-        libboost-all-dev libace-dev unzip wget p7zip-full \
+        libboost-all-dev libace-dev libtbb-dev unzip wget p7zip-full \
         gdb
       ;;
     login)
@@ -2258,6 +2258,9 @@ core_menu() {
     echo "1 - Clean Rebuild"
     echo "2 - Incremental Update"
     echo "3 - Configure Modules"
+    if is_vmangos; then
+      echo "4 - Test Build"
+    fi
     echo "0 - Back"
     echo
 
@@ -2284,6 +2287,17 @@ core_menu() {
         fi
         ;;
       3) configure_modules ;;
+      4)
+        if is_vmangos; then
+          read -p "Run vmangos test build? (YES): " CONFIRM
+          if [[ "$CONFIRM" == "YES" ]]; then
+            require_existing_game_container || continue
+            test_build_vmangos
+            echo
+            read -p "vMaNGOS test build finished. Press Enter to continue..." _
+          fi
+        fi
+        ;;
       0) return ;;
     esac
   done
@@ -2332,6 +2346,90 @@ configure_modules() {
   done
 }
 
+ensure_vmangos_build_deps() {
+  is_vmangos || return 0
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    missing=0
+    for pkg in git build-essential cmake mariadb-client rsync \
+      libssl-dev libbz2-dev libreadline-dev libcurl4-openssl-dev \
+      zlib1g-dev libncurses-dev libmariadb-dev libmariadb-dev-compat \
+      libboost-all-dev libace-dev libtbb-dev unzip wget p7zip-full gdb; do
+      dpkg -s \"\$pkg\" >/dev/null 2>&1 || { missing=1; break; }
+    done
+
+    if [[ \"\$missing\" -eq 1 ]]; then
+      apt update
+      apt install -y \
+        git build-essential cmake \
+        mariadb-client rsync \
+        libssl-dev libbz2-dev libreadline-dev \
+        libcurl4-openssl-dev zlib1g-dev \
+        libncurses-dev libmariadb-dev libmariadb-dev-compat \
+        libboost-all-dev libace-dev libtbb-dev unzip wget p7zip-full \
+        gdb
+    fi
+  "
+}
+
+normalize_vmangos_playerbots_case() {
+  is_vmangos || return 0
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    GAME_SRC='/opt/source/src/game'
+    if [[ -d \"\$GAME_SRC/PlayerBots\" && ! -e \"\$GAME_SRC/Playerbots\" ]]; then
+      ln -s PlayerBots \"\$GAME_SRC/Playerbots\"
+    fi
+  "
+}
+
+test_build_vmangos() {
+  is_vmangos || return 1
+  derive_db_names || return 1
+  local REPO BRANCH
+  REPO=$(expansion_repo "$EXPANSION") || return 1
+  BRANCH=$(expansion_branch "$EXPANSION") || return 1
+
+  ensure_vmangos_build_deps
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd /opt
+
+    if [[ -d source ]]; then
+      echo 'Updating existing vMaNGOS core for test build...'
+      cd source
+      git fetch origin
+      git checkout '$BRANCH'
+      git pull --ff-only origin '$BRANCH'
+    else
+      echo 'Cloning fresh vMaNGOS core for test build...'
+      git clone '$REPO' source
+      cd source
+      git checkout '$BRANCH'
+    fi
+  "
+
+  normalize_vmangos_playerbots_case
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    rm -rf /opt/source/build-test
+    mkdir -p /opt/source/build-test
+    cd /opt/source/build-test
+    cmake .. \
+      -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DBUILD_EXTRACTORS=ON \
+      -DBUILD_PLAYERBOTS=ON \
+      -DSUPPORTED_CLIENT_BUILD=5875
+    make -j\$(nproc)
+  "
+}
+
 comp_server() {
   derive_db_names || return 1
   local REPO BRANCH
@@ -2339,6 +2437,8 @@ comp_server() {
   BRANCH=$(expansion_branch "$EXPANSION") || return 1
 
   if is_vmangos; then
+    ensure_vmangos_build_deps
+
     pct exec "$GAME_CTID" -- bash -c "
       set -e
       cd /opt
@@ -2351,11 +2451,13 @@ comp_server() {
         git pull --ff-only origin '$BRANCH'
       else
         echo 'Cloning fresh vMaNGOS core...'
-        git clone '$REPO' source
-        cd source
-        git checkout '$BRANCH'
-      fi
+      git clone '$REPO' source
+      cd source
+      git checkout '$BRANCH'
+    fi
     "
+
+    normalize_vmangos_playerbots_case
 
     pct exec "$GAME_CTID" -- bash -c "
       set -e
@@ -2500,6 +2602,8 @@ update_core() {
   derive_db_names || return 1
 
   if is_vmangos; then
+    ensure_vmangos_build_deps
+
     local OLD_CORE
     OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD 2>/dev/null || echo "")
 
@@ -2510,6 +2614,8 @@ update_core() {
       git checkout '$(expansion_branch "$EXPANSION")'
       git pull --ff-only origin '$(expansion_branch "$EXPANSION")'
     "
+
+    normalize_vmangos_playerbots_case
 
     local NEW_CORE
     NEW_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
