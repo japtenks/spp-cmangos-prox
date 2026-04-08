@@ -381,8 +381,6 @@ WEBSITE_SRC_GIT_BRANCH="${WEBSITE_SRC_GIT_BRANCH:-unknown}"
 WEBSITE_SRC_GIT_COMMIT="${WEBSITE_SRC_GIT_COMMIT:-unknown}"
 WEBSITE_SRC_GIT_DATE="${WEBSITE_SRC_GIT_DATE:-unknown}"
 refresh_launcher_git_tracking
-auto_detect_stack
-refresh_website_git_tracking
 
 DB_CTID="${DB_CTID:-}"
 WEB_CTID="${WEB_CTID:-}"
@@ -1813,8 +1811,6 @@ deploy_realmd() {
 }
 
 shared_website_menu() {
-  auto_detect_stack
-  refresh_website_git_tracking
   echo
   echo "Website (Shared Classic/TBC/WotLK Admin)"
   echo "Use the website as the primary admin surface for shared realmlist changes."
