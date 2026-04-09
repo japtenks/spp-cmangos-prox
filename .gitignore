@@ -32,3 +32,4 @@ Saves
 /Sagrid-Argus/patch
 scripts/copy_tbc_dbs_over_ssh.sh
 Settings/vanilla/aiplayerbot.conf.old1
+core-db_latest.zip

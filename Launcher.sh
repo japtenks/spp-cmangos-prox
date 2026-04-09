@@ -1,6 +1,5 @@
 #!/bin/bash
 set -euo pipefail
-trap 'echo "ERROR at line $LINENO: $BASH_COMMAND" >&2' ERR
 DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_LAUNCHER_VERSION="22"
@@ -8,7 +7,13 @@ DEFAULT_LAUNCHER_VERSION="22"
 # -------------------------
 # First Run Bootstrap
 # -------------------------
-CONFIG_FILE="${SCRIPT_DIR}/config.env"
+CONFIG_FILE_PLAIN="${SCRIPT_DIR}/config.env"
+CONFIG_FILE_ENC="${SCRIPT_DIR}/config.env.enc"
+CONFIG_FILE="$CONFIG_FILE_PLAIN"
+CONFIG_RUNTIME_FILE=""
+CONFIG_STORAGE_MODE="plain"
+CONFIG_ENV_ENCRYPTION="0"
+CONFIG_ENCRYPTION_PASSPHRASE=""
 declare -A GAME_CTIDS
 WEBSITE_REPO="https://github.com/japtenks/SPP-Web.git"
 WEBSITE_SRC_DIR="/opt/SPP-Web"
@@ -39,17 +44,126 @@ append_config_default_line() {
   fi
 }
 
+cleanup_runtime_config() {
+  if [[ -n "${CONFIG_RUNTIME_FILE:-}" && -f "${CONFIG_RUNTIME_FILE}" ]]; then
+    rm -f "${CONFIG_RUNTIME_FILE}"
+  fi
+}
+
+ensure_runtime_config_copy() {
+  local source_file="$1"
+  [[ -f "$source_file" ]] || return 1
+
+  if [[ -z "${CONFIG_RUNTIME_FILE:-}" || ! -f "${CONFIG_RUNTIME_FILE}" ]]; then
+    CONFIG_RUNTIME_FILE=$(mktemp "${TMPDIR:-/tmp}/spp-config.XXXXXX")
+  fi
+
+  cp "$source_file" "${CONFIG_RUNTIME_FILE}"
+  chmod 600 "${CONFIG_RUNTIME_FILE}" 2>/dev/null || true
+  CONFIG_FILE="${CONFIG_RUNTIME_FILE}"
+}
+
+prompt_config_passphrase() {
+  local mode="${1:-unlock}"
+  local pass_one=""
+  local pass_two=""
+
+  if [[ "$mode" == "new" ]]; then
+    read -rsp "New config encryption passphrase: " pass_one
+    echo
+    [[ -n "$pass_one" ]] || { echo "Passphrase cannot be empty."; return 1; }
+    read -rsp "Confirm passphrase: " pass_two
+    echo
+    [[ "$pass_one" == "$pass_two" ]] || { echo "Passphrases did not match."; return 1; }
+  else
+    read -rsp "Config encryption passphrase: " pass_one
+    echo
+    [[ -n "$pass_one" ]] || { echo "Passphrase cannot be empty."; return 1; }
+  fi
+
+  CONFIG_ENCRYPTION_PASSPHRASE="$pass_one"
+}
+
+load_existing_config_storage() {
+  if [[ -f "$CONFIG_FILE_PLAIN" ]]; then
+    CONFIG_FILE="$CONFIG_FILE_PLAIN"
+    CONFIG_STORAGE_MODE="plain"
+    return 0
+  fi
+
+  if [[ -f "$CONFIG_FILE_ENC" ]]; then
+    command -v openssl >/dev/null 2>&1 || {
+      echo "Encrypted config detected at ${CONFIG_FILE_ENC}, but openssl is not installed."
+      exit 1
+    }
+
+    prompt_config_passphrase "unlock" || exit 1
+    ensure_runtime_config_copy "$CONFIG_FILE_ENC"
+    if ! openssl enc -d -aes-256-cbc -pbkdf2 -in "$CONFIG_FILE_ENC" -out "$CONFIG_FILE" -pass pass:"$CONFIG_ENCRYPTION_PASSPHRASE" >/dev/null 2>&1; then
+      echo "Failed to decrypt ${CONFIG_FILE_ENC}. Wrong passphrase or damaged file."
+      exit 1
+    fi
+    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    CONFIG_STORAGE_MODE="encrypted"
+    return 0
+  fi
+
+  CONFIG_FILE="$CONFIG_FILE_PLAIN"
+  CONFIG_STORAGE_MODE="plain"
+}
+
+persist_config_storage() {
+  if [[ "${CONFIG_STORAGE_MODE:-plain}" == "encrypted" || "${CONFIG_ENV_ENCRYPTION:-0}" == "1" ]]; then
+    command -v openssl >/dev/null 2>&1 || {
+      echo "Config encryption requires openssl."
+      return 1
+    }
+
+    if [[ -z "${CONFIG_ENCRYPTION_PASSPHRASE:-}" ]]; then
+      prompt_config_passphrase "unlock" || return 1
+    fi
+
+    if [[ "$CONFIG_FILE" == "$CONFIG_FILE_PLAIN" ]]; then
+      ensure_runtime_config_copy "$CONFIG_FILE_PLAIN" || return 1
+    fi
+
+    if ! openssl enc -aes-256-cbc -salt -pbkdf2 -in "$CONFIG_FILE" -out "$CONFIG_FILE_ENC" -pass pass:"$CONFIG_ENCRYPTION_PASSPHRASE" >/dev/null 2>&1; then
+      echo "Failed to encrypt config to ${CONFIG_FILE_ENC}."
+      return 1
+    fi
+
+    chmod 600 "$CONFIG_FILE_ENC" 2>/dev/null || true
+    rm -f "$CONFIG_FILE_PLAIN"
+    CONFIG_STORAGE_MODE="encrypted"
+  else
+    if [[ "$CONFIG_FILE" != "$CONFIG_FILE_PLAIN" ]]; then
+      cp "$CONFIG_FILE" "$CONFIG_FILE_PLAIN"
+    fi
+    chmod 600 "$CONFIG_FILE_PLAIN" 2>/dev/null || true
+    rm -f "$CONFIG_FILE_ENC"
+    CONFIG_STORAGE_MODE="plain"
+  fi
+}
+
+trap cleanup_runtime_config EXIT
+
 normalize_config_env() {
   [[ -f "$CONFIG_FILE" ]] || return 0
 
   # Canonical install-path ordering is owned by the launcher and must survive old configs.
   set_or_append_config_line "ALLOWED_EXPANSIONS" '("classic" "tbc" "wotlk" "vmangos")'
   set_or_append_config_line "LAUNCHER_VERSION" "\"${DEFAULT_LAUNCHER_VERSION}\""
+  append_config_default_line "CONFIG_ENV_ENCRYPTION" '"0"'
+  append_config_default_line "LAUNCHER_AUTO_UPDATE_ON_START" '"0"'
   append_config_default_line "LAUNCHER_GIT_BRANCH" '"unknown"'
   append_config_default_line "LAUNCHER_GIT_COMMIT" '"unknown"'
   append_config_default_line "WEBSITE_GIT_BRANCH" '"unknown"'
   append_config_default_line "WEBSITE_GIT_COMMIT" '"unknown"'
   append_config_default_line "WEBSITE_GIT_DATE" '"unknown"'
+  append_config_default_line "WEBSITE_REMOTE_GIT_BRANCH" '"unknown"'
+  append_config_default_line "WEBSITE_REMOTE_GIT_COMMIT" '"unknown"'
+  append_config_default_line "WEBSITE_REMOTE_GIT_DATE" '"unknown"'
+  append_config_default_line "WEBSITE_GIT_OUTDATED" '"0"'
 
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_DB_HOST" '""'
@@ -67,6 +181,48 @@ normalize_config_env() {
   append_config_default_line "MASTER_REALMD_DB" '""'
 }
 
+persist_launcher_auto_update_flag() {
+  local value="${1:-0}"
+  [[ -f "$CONFIG_FILE" ]] || return 0
+  set_or_append_config_line "LAUNCHER_AUTO_UPDATE_ON_START" "\"${value}\""
+  LAUNCHER_AUTO_UPDATE_ON_START="$value"
+  persist_config_storage
+}
+
+mark_launcher_clean_exit() {
+  persist_launcher_auto_update_flag "1"
+}
+
+mark_launcher_unclean_exit() {
+  persist_launcher_auto_update_flag "0"
+}
+
+exit_launcher_cleanly() {
+  mark_launcher_clean_exit
+  exit 0
+}
+
+handle_launcher_error() {
+  local line_no="$1"
+  local command="$2"
+  local exit_code="${3:-1}"
+  mark_launcher_unclean_exit
+  echo "ERROR at line ${line_no}: ${command}" >&2
+  exit "$exit_code"
+}
+
+handle_launcher_interrupt() {
+  local signal="${1:-INT}"
+  mark_launcher_unclean_exit
+  echo
+  echo "Interrupted by ${signal}. Auto-update disabled until the next clean exit."
+  exit 130
+}
+
+trap 'handle_launcher_error "$LINENO" "$BASH_COMMAND" "$?"' ERR
+trap 'handle_launcher_interrupt INT' INT
+trap 'handle_launcher_interrupt TERM' TERM
+
 refresh_launcher_git_tracking() {
   local branch="unknown"
   local commit="unknown"
@@ -81,6 +237,7 @@ refresh_launcher_git_tracking() {
 
   LAUNCHER_GIT_BRANCH="$branch"
   LAUNCHER_GIT_COMMIT="$commit"
+  persist_config_storage
 }
 
 refresh_website_git_tracking() {
@@ -108,22 +265,24 @@ refresh_website_git_tracking() {
   WEBSITE_GIT_BRANCH="$branch"
   WEBSITE_GIT_COMMIT="$commit"
   WEBSITE_GIT_DATE="$commit_date"
+  persist_config_storage
 }
 
 update_launcher_self() {
+  local mode="${1:-manual}"
   echo
   echo "Updating launcher from git..."
   echo
 
   git -C "$SCRIPT_DIR" fetch --all --prune || {
     echo "Launcher fetch failed."
-    read -p "Press Enter to continue..." _
+    [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
     return 1
   }
 
   git -C "$SCRIPT_DIR" pull --ff-only || {
     echo "Launcher update failed."
-    read -p "Press Enter to continue..." _
+    [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
     return 1
   }
 
@@ -145,6 +304,74 @@ update_launcher_self() {
   exec bash "$SCRIPT_DIR/Launcher.sh"
 }
 
+refresh_website_remote_git_tracking() {
+  local remote_branch="unknown"
+  local remote_commit="unknown"
+  local remote_date="unknown"
+  local outdated="0"
+  local target_repo="${WEBSITE_SRC_DIR}"
+
+  auto_detect_stack
+
+  if [[ -n "${WEB_CTID:-}" ]] && ! pct exec "$WEB_CTID" -- test -d "${target_repo}/.git" 2>/dev/null; then
+    target_repo="/var/www/html"
+  fi
+
+  if [[ -n "${WEB_CTID:-}" ]] && pct exec "$WEB_CTID" -- test -d "${target_repo}/.git" 2>/dev/null; then
+    pct exec "$WEB_CTID" -- bash -c "git -C '${target_repo}' fetch --quiet origin >/dev/null 2>&1 || true"
+    remote_branch=$(pct exec "$WEB_CTID" -- bash -c "
+      branch=\$(git -C '${target_repo}' rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+      if [[ \"\$branch\" != \"unknown\" ]] && git -C '${target_repo}' show-ref --verify --quiet \"refs/remotes/origin/\$branch\"; then
+        echo \"\$branch\"
+      else
+        echo unknown
+      fi
+    " | tr -d '\r' | tail -n 1)
+    if [[ "$remote_branch" != "unknown" ]]; then
+      remote_commit=$(pct exec "$WEB_CTID" -- bash -c "git -C '${target_repo}' rev-parse --short=12 'origin/${remote_branch}' 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+      remote_date=$(pct exec "$WEB_CTID" -- bash -c "git -C '${target_repo}' log -1 --date=short --format=%cd 'origin/${remote_branch}' 2>/dev/null || echo unknown" | tr -d '\r' | tail -n 1)
+      outdated=$(pct exec "$WEB_CTID" -- bash -c "
+        if [[ \$(git -C '${target_repo}' rev-parse HEAD 2>/dev/null || echo unknown) == \$(git -C '${target_repo}' rev-parse 'origin/${remote_branch}' 2>/dev/null || echo different) ]]; then
+          echo 0
+        elif git -C '${target_repo}' merge-base --is-ancestor HEAD 'origin/${remote_branch}' >/dev/null 2>&1; then
+          echo 1
+        else
+          echo 0
+        fi
+      " | tr -d '\r' | tail -n 1)
+    fi
+  fi
+
+  set_or_append_config_line "WEBSITE_REMOTE_GIT_BRANCH" "\"${remote_branch}\""
+  set_or_append_config_line "WEBSITE_REMOTE_GIT_COMMIT" "\"${remote_commit}\""
+  set_or_append_config_line "WEBSITE_REMOTE_GIT_DATE" "\"${remote_date}\""
+  set_or_append_config_line "WEBSITE_GIT_OUTDATED" "\"${outdated}\""
+
+  WEBSITE_REMOTE_GIT_BRANCH="$remote_branch"
+  WEBSITE_REMOTE_GIT_COMMIT="$remote_commit"
+  WEBSITE_REMOTE_GIT_DATE="$remote_date"
+  WEBSITE_GIT_OUTDATED="$outdated"
+  persist_config_storage
+}
+
+run_startup_scan() {
+  refresh_launcher_git_tracking
+  refresh_website_git_tracking
+  refresh_website_remote_git_tracking
+}
+
+run_startup_auto_update_if_needed() {
+  if [[ "${LAUNCHER_AUTO_UPDATE_ON_START:-0}" == "1" ]]; then
+    echo
+    echo "Previous launcher session exited cleanly. Running startup auto-update..."
+    mark_launcher_unclean_exit
+    update_launcher_self "startup" || {
+      echo "Startup auto-update skipped after a git error."
+      sleep 1
+    }
+  fi
+}
+
 auto_detect_stack() {
   local _pct
   _pct=$(pct list) || return
@@ -158,6 +385,8 @@ auto_detect_stack() {
   done
   return 0
 }
+
+load_existing_config_storage
 
 if [[ ! -f $CONFIG_FILE ]]; then
   echo "Config missing. Attempting auto-detection..."
@@ -258,6 +487,7 @@ if [[ ! -f $CONFIG_FILE ]]; then
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 INSTALLED_EXPANSIONS=()
 LAUNCHER_VERSION="$DEFAULT_LAUNCHER_VERSION"
+CONFIG_ENV_ENCRYPTION="0"
 LAUNCHER_GIT_BRANCH="unknown"
 LAUNCHER_GIT_COMMIT="unknown"
 WEBSITE_GIT_BRANCH="unknown"
@@ -358,15 +588,26 @@ fi
 
 normalize_config_env
 source "$CONFIG_FILE"
+CONFIG_ENV_ENCRYPTION="${CONFIG_ENV_ENCRYPTION:-0}"
+if [[ "${CONFIG_ENV_ENCRYPTION}" == "1" ]]; then
+  CONFIG_STORAGE_MODE="encrypted"
+fi
+persist_config_storage
 
 # Keep install-path ordering canonical even if an older config.env exists.
 ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
 LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
+CONFIG_ENV_ENCRYPTION="${CONFIG_ENV_ENCRYPTION:-0}"
+LAUNCHER_AUTO_UPDATE_ON_START="${LAUNCHER_AUTO_UPDATE_ON_START:-0}"
 LAUNCHER_GIT_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
 LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
 WEBSITE_GIT_BRANCH="${WEBSITE_GIT_BRANCH:-unknown}"
 WEBSITE_GIT_COMMIT="${WEBSITE_GIT_COMMIT:-unknown}"
 WEBSITE_GIT_DATE="${WEBSITE_GIT_DATE:-unknown}"
+WEBSITE_REMOTE_GIT_BRANCH="${WEBSITE_REMOTE_GIT_BRANCH:-unknown}"
+WEBSITE_REMOTE_GIT_COMMIT="${WEBSITE_REMOTE_GIT_COMMIT:-unknown}"
+WEBSITE_REMOTE_GIT_DATE="${WEBSITE_REMOTE_GIT_DATE:-unknown}"
+WEBSITE_GIT_OUTDATED="${WEBSITE_GIT_OUTDATED:-0}"
 refresh_launcher_git_tracking
 
 DB_CTID="${DB_CTID:-}"
@@ -733,7 +974,7 @@ mariadb)
     systemctl restart mariadb
   "
   DB_HOST=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
-  sed -i "s/^DB_HOST=.*/DB_HOST=\"$DB_HOST\"/" "$CONFIG_FILE"
+  set_config_value "DB_HOST" "$DB_HOST"
   ;;
     website)
       pct exec "$CTID" -- bash -c "
@@ -863,6 +1104,7 @@ set_config_value() {
   else
     printf '%s="%s"\n' "$KEY" "$VALUE" >> "$CONFIG_FILE"
   fi
+  persist_config_storage
 }
 
 pin_master_expansion() {
@@ -1203,8 +1445,14 @@ print_banner() {
   echo "# SPP - ${EXP^}"
   echo "########################################"
   echo -e "$LOGO"
+  local RED="\e[31m"
+  local RESET="\e[0m"
+  local WEB_LINE="SPP-Web Git: ${WEBSITE_GIT_BRANCH}@${WEBSITE_GIT_COMMIT} (${WEBSITE_GIT_DATE})"
+  if [[ "${WEBSITE_GIT_OUTDATED:-0}" == "1" ]]; then
+    WEB_LINE="${RED}${WEB_LINE} [update available: ${WEBSITE_REMOTE_GIT_BRANCH}@${WEBSITE_REMOTE_GIT_COMMIT} (${WEBSITE_REMOTE_GIT_DATE})]${RESET}"
+  fi
   echo "Launcher Git: ${BANNER_BRANCH}@${BANNER_COMMIT}"
-  echo "SPP-Web Git: ${WEBSITE_GIT_BRANCH}@${WEBSITE_GIT_COMMIT} (${WEBSITE_GIT_DATE})"
+  echo -e "$WEB_LINE"
   echo -e "$CLEAR"
 }
 
@@ -1223,14 +1471,13 @@ print_version() {
     done
   " 2>/dev/null) || RAW=""
 
-  local CORE_RAW WORLD_RAW CHARS_RAW REALM_RAW LOGS_RAW MAPS_RAW WEB_RAW
+  local CORE_RAW WORLD_RAW CHARS_RAW REALM_RAW LOGS_RAW MAPS_RAW
   CORE_RAW=$(grep  '^core:'    <<< "$RAW" | cut -d: -f2-)
   WORLD_RAW=$(grep '^world:'   <<< "$RAW" | cut -d: -f2-)
   CHARS_RAW=$(grep '^chars:'   <<< "$RAW" | cut -d: -f2-)
   REALM_RAW=$(grep '^realm:'   <<< "$RAW" | cut -d: -f2-)
   LOGS_RAW=$(grep  '^logs:'    <<< "$RAW" | cut -d: -f2-)
   MAPS_RAW=$(grep  '^maps:'    <<< "$RAW" | cut -d: -f2-)
-  WEB_RAW=$(grep   '^website:' <<< "$RAW" | cut -d: -f2-)
 
   local CORE_VER CORE_BRANCH CORE_COMMIT BOT_BRANCH BOT_COMMIT BUILD_DATE
   IFS='|' read -r CORE_VER CORE_BRANCH CORE_COMMIT BOT_BRANCH BOT_COMMIT BUILD_DATE <<< "$CORE_RAW"
@@ -1240,7 +1487,6 @@ print_version() {
   local REALM_VER; IFS='|' read -r REALM_VER _ <<< "$REALM_RAW"
   local LOGS_VER;  IFS='|' read -r LOGS_VER  _ <<< "$LOGS_RAW"
   local MAPS_VER;  IFS='|' read -r MAPS_VER  _ <<< "$MAPS_RAW"
-  local WEB_VER;   IFS='|' read -r WEB_VER   _ <<< "$WEB_RAW"
 
   local GREEN="\e[32m" RED="\e[31m" YELLOW="\e[33m" RESET="\e[0m"
   local EXPECTED_CORE="${VERSION_MAP[$EXPANSION:CORE]:-}"
@@ -1254,7 +1500,7 @@ print_version() {
   echo    "Built: ${BUILD_DATE:-unknown}"
   echo -e "World: ${WORLD_COLOR}${WORLD_VER:-NA}${RESET}"
   echo    "Chars: ${CHARS_VER:-NA}  Realm: ${REALM_VER:-NA}  Maps: ${MAPS_VER:-NA}"
-  echo    "Web: ${WEB_VER:-NA}  Logs: ${LOGS_VER:-NA}"
+  echo    "Logs: ${LOGS_VER:-NA}"
 }
 
 
@@ -1382,7 +1628,7 @@ expansion_menu() {
     read -p "Selection: " SEL
     SEL="${SEL:-}"
 
-    [[ "$SEL" == "0" ]] && exit 0
+    [[ "$SEL" == "0" ]] && exit_launcher_cleanly
 
     if [[ "$SEL" =~ ^[Mm]$ ]]; then
       shared_services_menu
@@ -1585,6 +1831,7 @@ shared_config_menu() {
   echo "4 - RealmD Install"
   echo "5 - spp configs"
   echo "6 - Fix mariadb configs"
+  echo "7 - Config encryption: (${CONFIG_ENV_ENCRYPTION})"
   echo "0 - Back"
 
   read -p "Selection: " C
@@ -1596,7 +1843,62 @@ shared_config_menu() {
 	4) run_with_shared_classic_context deploy_realmd ;;
 	5) run_with_shared_classic_context deploy_spp_configs ;;
 	6) fix_mariadb_bind ;;
+    7) toggle_config_encryption ;;
   esac
+}
+
+toggle_config_encryption() {
+  echo
+  if [[ "${CONFIG_ENV_ENCRYPTION:-0}" == "1" ]]; then
+    echo "Config encryption is currently ENABLED."
+    read -p "Disable encryption and write plaintext config.env on disk? (YES): " CONFIRM
+    [[ "$CONFIRM" == "YES" ]] || return
+
+    CONFIG_ENV_ENCRYPTION="0"
+    CONFIG_STORAGE_MODE="plain"
+    set_or_append_config_line "CONFIG_ENV_ENCRYPTION" "\"0\""
+    persist_config_storage || {
+      CONFIG_ENV_ENCRYPTION="1"
+      CONFIG_STORAGE_MODE="encrypted"
+      set_or_append_config_line "CONFIG_ENV_ENCRYPTION" "\"1\""
+      echo "Failed to disable config encryption."
+      read -p "Press Enter to continue..." _
+      return 1
+    }
+
+    echo "Config encryption disabled. Settings are now stored in config.env."
+  else
+    command -v openssl >/dev/null 2>&1 || {
+      echo "OpenSSL is required to enable config encryption."
+      read -p "Press Enter to continue..." _
+      return 1
+    }
+
+    echo "Config encryption is currently DISABLED."
+    read -p "Enable encrypted config storage? (YES): " CONFIRM
+    [[ "$CONFIRM" == "YES" ]] || return
+
+    prompt_config_passphrase "new" || {
+      read -p "Press Enter to continue..." _
+      return 1
+    }
+
+    CONFIG_ENV_ENCRYPTION="1"
+    CONFIG_STORAGE_MODE="encrypted"
+    set_or_append_config_line "CONFIG_ENV_ENCRYPTION" "\"1\""
+    persist_config_storage || {
+      CONFIG_ENV_ENCRYPTION="0"
+      CONFIG_STORAGE_MODE="plain"
+      set_or_append_config_line "CONFIG_ENV_ENCRYPTION" "\"0\""
+      echo "Failed to enable config encryption."
+      read -p "Press Enter to continue..." _
+      return 1
+    }
+
+    echo "Config encryption enabled. Settings are now stored in config.env.enc."
+  fi
+
+  read -p "Press Enter to continue..." _
 }
 
 update_db_conf() {
@@ -2195,9 +2497,9 @@ connect_ra() {
 }
 live_logs() {
   echo "Press Ctrl+C to exit live view."
-  trap 'echo; echo "Returning to menu..."; return' INT
+  trap 'mark_launcher_unclean_exit; echo; echo "Returning to menu..."; return' INT
   pct exec "$GAME_CTID" -- tail -f /var/log/mangos/Server.log
-  trap - INT
+  trap 'handle_launcher_interrupt INT' INT
 }
 toggle_autostart() {
 
@@ -2210,8 +2512,8 @@ toggle_autostart() {
   fi
 
   # update config.env
-  sed -i "s/^AUTO_START=.*/AUTO_START=\"$AUTO_START\"/" "$CONFIG_FILE"
-  sed -i "s/^ASV=.*/ASV=\"$ASV\"/" "$CONFIG_FILE"
+  set_config_value "AUTO_START" "$AUTO_START"
+  set_config_value "ASV" "$ASV"
   apply_autostart_setting
 
   echo "AUTO_START is now: $AUTO_START"
@@ -4633,10 +4935,7 @@ analyze_crash() {
     pct exec "$GAME_CTID" -- coredumpctl gdb mangosd
   fi
 }
-
-
-
-echo "DEBUG: reaching main" >&2
-
 #program starts here
+run_startup_auto_update_if_needed
+run_startup_scan
 main
