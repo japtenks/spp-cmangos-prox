@@ -120,6 +120,14 @@ Important bootstrap output:
 
 Treat `config.env` as sensitive because it stores the database and RA credentials used by the stack.
 
+Optional at-rest encryption is available from:
+
+```text
+Shared Services -> Configuration -> Config encryption
+```
+
+When enabled, the launcher stores secrets in `config.env.enc` instead of plaintext `config.env` and prompts for the passphrase when it starts.
+
 ## Install Flow
 
 ### 1. Select an install path

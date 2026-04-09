@@ -2236,6 +2236,7 @@ install_website() {
   install_website_db
   web_config
   refresh_website_git_tracking
+  refresh_website_remote_git_tracking
 
   local WEB_EXPECTED="${VERSION_MAP[$EXPANSION:WEBSITE]}"
   local INSTALL_DATE
@@ -2320,6 +2321,7 @@ update_website() {
 
   web_config
   refresh_website_git_tracking
+  refresh_website_remote_git_tracking
 }
 web_config() {
   auto_detect_stack
@@ -2678,7 +2680,8 @@ configure_modules() {
       local cur="${!var:-ON}"
       local new="OFF"; [[ "$cur" == "OFF" ]] && new="ON"
       eval "MODULE_${mod}=${new}"
-      sed -i "s/^MODULE_${mod}=.*/MODULE_${mod}=${new}/" "$CONFIG_FILE"
+      set_or_append_config_line "MODULE_${mod}" "${new}"
+      persist_config_storage
       echo "  $mod → $new"
       sleep 0.5
     fi
