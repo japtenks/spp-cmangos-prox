@@ -4081,6 +4081,7 @@ install_data() {
   if is_vmangos; then
     local ASSET_DIR="/opt/spp-assets/vmangos/data"
     local FALLBACK_ASSET_DIR="/opt/spp-assets/vanilla/data"
+    local FALLBACK_ASSET_URL="https://github.com/celguar/spp-classics-cmangos/releases/download/v2.0/vanilla.7z"
 
     pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
@@ -4090,8 +4091,22 @@ install_data() {
           mkdir -p '$ASSET_DIR'
           rsync -a '$FALLBACK_ASSET_DIR/' '$ASSET_DIR/'
         else
-          echo 'Missing /opt/spp-assets/vmangos/data and no local Classic asset pack found at /opt/spp-assets/vanilla/data.'
-          exit 1
+          echo 'vMaNGOS data pack missing; downloading local Classic asset pack fallback...'
+          mkdir -p '$FALLBACK_ASSET_DIR'
+          TMP_ARCHIVE='/tmp/vanilla.7z'
+          if command -v curl >/dev/null 2>&1; then
+            curl -L --fail --output \"\$TMP_ARCHIVE\" '$FALLBACK_ASSET_URL'
+          elif command -v wget >/dev/null 2>&1; then
+            wget -O \"\$TMP_ARCHIVE\" '$FALLBACK_ASSET_URL'
+          else
+            echo 'Missing curl/wget to download Classic data pack fallback.'
+            exit 1
+          fi
+          rm -rf '$FALLBACK_ASSET_DIR'/*
+          7z x -y \"\$TMP_ARCHIVE\" -o'$FALLBACK_ASSET_DIR' >/dev/null
+          rm -f \"\$TMP_ARCHIVE\"
+          mkdir -p '$ASSET_DIR'
+          rsync -a '$FALLBACK_ASSET_DIR/' '$ASSET_DIR/'
         fi
       fi
       for required_dir in dbc maps vmaps mmaps; do
