@@ -93,6 +93,11 @@ Status: `Confirmed`
 - The reused Classic data pack is good enough to advance startup, but vMaNGOS expects DBCs under the build-specific path `../data/5875/dbc`, not just `../data/dbc`.
 - Reusing the Classic `mmaps` gets startup farther, but those files are not format-compatible long-term: the reused pack reported `generator v8`, while this vmangos fork expects `generator v6`.
 - `mangosd` progressed past mmap warnings and then failed on missing playerbot schema in `vmangoscharacters` (`ai_playerbot_random_bots`), proving the remaining runtime blocker is playerbot SQL parity rather than general core/database startup.
+- After the bundled PlayerBots SQL was imported, the `ai_playerbot_random_bots` crash stopped reproducing, but runtime later hit a new `SIGSEGV` in `Channel::Join` during `PlayerbotHolder::JoinChatChannels` on bot login.
+- The current local vmangos source carries a temporary stabilization patch that disables bot auto-joining chat channels during async bot login; treat that as a narrow runtime workaround, not a completed fix for chat/channel threading.
+- During current bot-crash triage, the launcher-side vmangos logging baseline was raised:
+  - `mangosd.conf`: `LogLevel = 3`, `LogFileLevel = 4`
+  - `aiplayerbot.conf`: `AiPlayerbot.PerfMonEnabled = 1`
 - `core-db_latest.zip` from Ile's `db_latest` release is only a source-tree snapshot. It does not contain `ai_playerbot_random_bots`, and it is not a packaged DB dump for playerbot schema/data.
 - The current account schemas differ between shared `classicrealmd.account` and dedicated `vmangosrealmd.account`, so standalone account copy must use a column-mapped insert rather than a blind row copy.
 - The `SPP-Web` admin backup/xfer lane now has a vmangos-aware website patch in progress: it can expose vmangos transfer routes and generate account-xfer SQL that maps target account columns and sets the vmangos realm field to realm `4` instead of relying on a blind account row copy.
@@ -175,12 +180,13 @@ Status: `Next`
    - vmangos `mangosd.conf` should deploy with `DataDir = "../data"`
    - vmangos data install should account for `5875/dbc`
 5. Continue runtime validation after the bot SQL rerun and determine whether vmangos-compatible `mmaps` are required immediately or only for full pathfinding parity.
+6. Re-test runtime with the temporary bot chat-channel workaround in place and capture whether the `Channel::Join` segfault is gone.
 6. Prepare standalone vmangos account creation/copy flow against `vmangosrealmd`, using column-mapped inserts from `classicrealmd.account` rather than blind row copies.
 7. Wire up website-side account/character/guild transfer planning for `spp-classic` -> `spp-vmangos`.
 8. Ensure the website-side vmangos lane can read from `vmangosrealmd` where needed, including WTF-download-related realm/account lookup paths.
 9. Validate the new `SPP-Web` admin account-xfer package path against live `classicrealmd` -> `vmangosrealmd` schemas and confirm the generated SQL lands accounts on realm `4`.
-9. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
-10. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
+10. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
+11. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
 
 ## Handoff Notes
 
