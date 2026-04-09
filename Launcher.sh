@@ -4134,14 +4134,27 @@ install_data() {
           rsync -a '$FALLBACK_ASSET_DIR/' '$ASSET_DIR/'
         fi
       fi
-      for required_dir in dbc maps vmaps mmaps; do
+      for required_dir in maps vmaps mmaps; do
         if [[ ! -d '$ASSET_DIR/'\"\$required_dir\" ]]; then
           echo \"Missing required vMaNGOS data directory: $ASSET_DIR/\$required_dir\"
           exit 1
         fi
       done
+      if [[ ! -d '$ASSET_DIR/dbc' && ! -d '$ASSET_DIR/5875/dbc' ]]; then
+        echo 'Missing required vMaNGOS DBC data directory: expected dbc or 5875/dbc.'
+        exit 1
+      fi
       mkdir -p '$INSTALL_DIR/data'
       rsync -a --delete '$ASSET_DIR/' '$INSTALL_DIR/data/'
+      if [[ ! -d '$INSTALL_DIR/data/5875/dbc' ]]; then
+        if [[ -d '$INSTALL_DIR/data/dbc' ]]; then
+          mkdir -p '$INSTALL_DIR/data/5875'
+          ln -sfn ../dbc '$INSTALL_DIR/data/5875/dbc'
+        else
+          echo 'Missing installed vMaNGOS DBC data directory after sync.'
+          exit 1
+        fi
+      fi
     "
 
     local MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"

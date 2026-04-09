@@ -57,7 +57,10 @@ Status: `Confirmed`
 - For runtime validation that does not use a launcher-managed DB container, the operator-provided external DB endpoint is `192.168.1.47:3306` with `mangos` / `mangos`.
 - The launcher now supports vmangos-specific external DB targeting through `VMANGOS_DB_HOST` and `VMANGOS_DB_PORT` in `config.env`, with fallback to the DB CT only when those are unset.
 - The launcher also supports `VMANGOS_WORLD_DB_URL` in `config.env`; when no staged vmangos world asset exists yet, the vmangos world installer can download the configured archive into `/opt/spp-assets/vmangos/sql/` automatically.
-- The launcher vmangos data install path now auto-seeds `/opt/spp-assets/vmangos/data/` from `/opt/spp-assets/vanilla/data/` when no dedicated vmangos asset pack exists locally, then validates `dbc`, `maps`, `vmaps`, and `mmaps` before copying into `/srv/vmangos/data/`.
+- The launcher vmangos data install path now auto-seeds `/opt/spp-assets/vmangos/data/` from `/opt/spp-assets/vanilla/data/` when no dedicated vmangos asset pack exists locally; if neither exists, it downloads the same `vanilla.7z` Classic data pack used by the SPP Classic lane, then validates `dbc`, `maps`, `vmaps`, and `mmaps` before copying into `/srv/vmangos/data/`.
+- On `ser8`, launcher-managed vmangos DB install completed through world, characters, logs, and dedicated `vmangosrealmd`, including bot rotation setup.
+- Manual runtime smoke testing on `ser8` confirmed `realmd` starts cleanly against `vmangosrealmd`.
+- Manual runtime smoke testing on `ser8` also confirmed `mangosd` reaches world startup, but runtime still needs launcher parity fixes for data layout and playerbot schema import.
 
 ## Confirmed Findings
 
@@ -81,6 +84,18 @@ Status: `Confirmed`
 - The launcher's original vmangos inline patch helpers were too narrow for a fresh-clone Linux build. A deterministic patch-stack approach is more reliable than accumulating ad hoc `perl` edits.
 - The launcher vmangos DB install/config path also needed external-DB support; vmangos now resolves DB host/port from `VMANGOS_DB_HOST` / `VMANGOS_DB_PORT` before falling back to `DB_CTID`.
 - Per the upstream setup guide, the vMaNGOS world DB is not seeded from the core repo alone; it comes from a separate world database release, then receives repo-side `sql/migrations/*_world.sql` updates.
+- The `vmangos-ike3-playerbots` fork also ships required bot SQL under `src/game/PlayerBots/sql/{characters,world/classic}`. The launcher vmangos DB install must import that SQL into `vmangoscharacters` and `vmangos` or `mangosd` will later fail on missing `ai_playerbot_*` tables.
+- The current local launcher source already includes bundled PlayerBots SQL import loops for both vmangos world and characters DB install paths; `ser8` still needs a launcher sync plus DB reinstall for those imports to actually take effect there.
+- The launcher vmangos config writer needed two additional runtime fixes:
+  - `mangosd.conf` must use the resolved vmangos DB endpoint, including `VMANGOS_DB_PORT`, not a blank port slot.
+  - `RealmID` in `mangosd.conf` must match the dedicated `vmangosrealmd.realmlist` row (`id = 4` in the current lane).
+- The launcher-managed vmangos data copy currently places assets under `/srv/vmangos/data`, but the deployed `mangosd.conf` still required manual correction from `DataDir = "."` to `DataDir = "../data"` during runtime smoke testing.
+- The reused Classic data pack is good enough to advance startup, but vMaNGOS expects DBCs under the build-specific path `../data/5875/dbc`, not just `../data/dbc`.
+- Reusing the Classic `mmaps` gets startup farther, but those files are not format-compatible long-term: the reused pack reported `generator v8`, while this vmangos fork expects `generator v6`.
+- `mangosd` progressed past mmap warnings and then failed on missing playerbot schema in `vmangoscharacters` (`ai_playerbot_random_bots`), proving the remaining runtime blocker is playerbot SQL parity rather than general core/database startup.
+- `core-db_latest.zip` from Ile's `db_latest` release is only a source-tree snapshot. It does not contain `ai_playerbot_random_bots`, and it is not a packaged DB dump for playerbot schema/data.
+- The current account schemas differ between shared `classicrealmd.account` and dedicated `vmangosrealmd.account`, so standalone account copy must use a column-mapped insert rather than a blind row copy.
+- The `SPP-Web` admin backup/xfer lane now has a vmangos-aware website patch in progress: it can expose vmangos transfer routes and generate account-xfer SQL that maps target account columns and sets the vmangos realm field to realm `4` instead of relying on a blind account row copy.
 - On `m1pro`, there was no pre-existing launcher checkout or vmangos container to reuse; the target-side validation path started from a fresh Debian 13 LXC.
 - A temporary Debian 13 LXC on `m1pro` (`CT 490`, hostname `spp-vmangos-test`) successfully configured and then built `mangosd` and `realmd` from a fresh clone when the exact WSL fix set was applied.
 - The `m1pro` validation is useful proof that the fix set works in Proxmox/LXC, but `ser8` remains the intended host for continued operator-driven validation.
@@ -108,9 +123,13 @@ Status: `Blocked`
 
 ### Proxmox/LXC validation still pending
 
-- Observed symptom: the launcher-managed core install now succeeds on `ser8`, but vmangos DB install failed because the launcher only looked for `/opt/spp-assets/vmangos/sql/world.sql` or `world.7z`.
-- Current hypothesis: `ser8` needs a staged vMaNGOS world database release from the separate database repo, and the launcher should accept broader release naming such as `world_full_*.7z` before applying repo migrations.
-- Next action: update the launcher vmangos world installer to accept staged world release archives/files with vmangos-style naming, then rerun DB/runtime validation against the external DB host.
+- Observed symptom: launcher-managed build, DB install, and data pack install now succeed on `ser8`, and manual `realmd` startup succeeds, but `mangosd` still needs launcher parity fixes for runtime paths/schema.
+- Current hypothesis: the remaining runtime work is:
+  - bake `DataDir = "../data"` into vmangos config deployment,
+  - account for the `5875/dbc` path expectation,
+  - import bundled playerbot SQL automatically,
+  - and either supply vmangos-compatible `mmaps` or allow a temporary smoke-test path without them.
+- Next action: sync the latest launcher, rerun vmangos DB install to import bundled playerbot SQL, then continue runtime validation against the external DB host.
 
 ### MariaDB/MySQL compatibility warning still needs separate review
 
@@ -149,14 +168,19 @@ Use the master/sub-agent split when:
 
 Status: `Next`
 
-1. Record the confirmed WSL success path and exact fix set in this control doc.
-2. Reflect any durable build assumptions needed by the launcher vmangos flow.
-3. Update the vmangos DB installer to accept a staged external world DB release and apply repo-side `*_world.sql` migrations after import.
-4. Set `VMANGOS_DB_HOST` / `VMANGOS_DB_PORT` in `config.env` when using the external DB host instead of a DB CT.
-5. Validate DB import on `ser8` against the intended DB target (`192.168.1.47:3306`).
-6. Validate runtime basics after DB/data install succeeds.
-7. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
-8. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
+1. Keep this control doc current as the vmangos runtime lane moves.
+2. Sync the latest launcher changes to `ser8`, especially the bundled playerbot SQL import path.
+3. Rerun vmangos DB install on `ser8` so `src/game/PlayerBots/sql/{characters,world/classic}` is actually imported into `vmangoscharacters` and `vmangos`.
+4. Fold the manual runtime fixes back into launcher parity:
+   - vmangos `mangosd.conf` should deploy with `DataDir = "../data"`
+   - vmangos data install should account for `5875/dbc`
+5. Continue runtime validation after the bot SQL rerun and determine whether vmangos-compatible `mmaps` are required immediately or only for full pathfinding parity.
+6. Prepare standalone vmangos account creation/copy flow against `vmangosrealmd`, using column-mapped inserts from `classicrealmd.account` rather than blind row copies.
+7. Wire up website-side account/character/guild transfer planning for `spp-classic` -> `spp-vmangos`.
+8. Ensure the website-side vmangos lane can read from `vmangosrealmd` where needed, including WTF-download-related realm/account lookup paths.
+9. Validate the new `SPP-Web` admin account-xfer package path against live `classicrealmd` -> `vmangosrealmd` schemas and confirm the generated SQL lands accounts on realm `4`.
+9. Decide whether any fork fixes should be upstreamed or preserved as a local patch stack.
+10. Revisit non-blocking compatibility warnings such as the MariaDB/MySQL guard once build/install parity is stable.
 
 ## Handoff Notes
 
@@ -173,14 +197,29 @@ Status: `Confirmed`
   - `VMANGOS_DB_PORT`
   - `VMANGOS_WORLD_DB_URL`
 - Most useful logs to capture next:
-  - first `ser8` target-side DB import failure, including which vmangos world asset name/path was staged
-  - whether the vmangos data install seeded from local Classic assets or used a dedicated vmangos data pack
-  - any runtime/load errors after successful install against the chosen DB target
+  - the next `ser8` vmangos DB reinstall run after the bundled PlayerBots SQL import patch
+  - whether `mangosd` still reports missing `ai_playerbot_*` tables after that rerun
+  - whether `mangosd` still requires manual `DataDir`/`5875/dbc` fixes after the next launcher sync
+  - any remaining mmap/data-layout mismatches during startup
 - Next-agent handoff focus:
-  - treat the `ser8` core build/install as confirmed green
-  - set `VMANGOS_DB_HOST="192.168.1.47"` and `VMANGOS_DB_PORT="3306"` in `config.env` if not already set
-  - ensure `/opt/spp-assets/vmangos/sql/` contains a staged vMaNGOS world DB release from the separate database repo
-  - run vmangos DB install/runtime validation against the external DB host
+  - treat the `ser8` core build/install, DB install, and data-pack install as confirmed green
+  - treat `realmd` startup against `vmangosrealmd` as confirmed green
+  - rerun vmangos DB install on `ser8` after syncing the new launcher so bundled PlayerBots SQL is imported
+  - confirm whether `mangosd` still crashes on `ai_playerbot_random_bots` after that rerun
+  - fold the remaining manual runtime fixes into launcher parity:
+    - `DataDir = "../data"`
+    - `5875/dbc` layout support
+  - prepare standalone account creation/copy for vmangos:
+    - source DB: `classicrealmd.account`
+    - target DB: `vmangosrealmd.account`
+    - use column-mapped insert/update, not raw row copy
+    - set `current_realm = 4` for imported vmangos accounts
+  - prepare website-side transfer work for `spp-classic` -> `spp-vmangos`:
+    - account copy
+    - character transfer
+    - guild transfer
+    - identify where `spp-web` should surface those actions and what DB mappings/config it will need
+    - ensure the website can also pull the needed realm/account context from `vmangosrealmd` for WTF download support
   - record exact commands, failures, and runtime observations back into this file
 - Treat Linux case sensitivity and Linux portability issues as first-class concerns; do not assume Windows path behavior is safe.
 - Preserve the distinction between:
