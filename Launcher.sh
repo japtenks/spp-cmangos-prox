@@ -1603,11 +1603,23 @@ update_db_conf() {
   derive_db_names || return 1
   local TARGET_EXPANSION="${1:-$EXPANSION}"
   local CONFIG_EXPANSIONS=("$TARGET_EXPANSION")
+  local SAVED_EXPANSION="$EXPANSION"
+  local SAVED_GAME_CTID="${GAME_CTID:-}"
 
-  DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+  if is_vmangos "$TARGET_EXPANSION"; then
+    EXPANSION="$TARGET_EXPANSION"
+    GAME_CTID="${GAME_CTIDS[$EXPANSION]:-${GAME_CTID:-}}"
+    derive_db_names || return 1
+    resolve_vmangos_db_endpoint || return 1
+  else
+    DB_IP=$(pct exec "$DB_CTID" -- hostname -I | awk '{print $1}')
+    DB_PORT="3306"
+  fi
 
   MASTER_EXPANSION=$(resolve_shared_master_expansion) || {
     echo "No shared Classic/TBC/WotLK master expansion is available yet."
+    EXPANSION="$SAVED_EXPANSION"
+    GAME_CTID="$SAVED_GAME_CTID"
     return 1
   }
 
@@ -1653,6 +1665,7 @@ update_db_conf() {
     pct exec "$GAME_CTID" -- bash -c "
       if [[ '$EXP' == 'vmangos' ]]; then
         sed -i \
+        -e 's|^RealmID *=.*|RealmID = ${REALM_ID}|' \
         -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
         -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
         -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
@@ -1670,6 +1683,9 @@ update_db_conf() {
 
     echo "$EXP mangosd.conf updated."
   done
+
+  EXPANSION="$SAVED_EXPANSION"
+  GAME_CTID="$SAVED_GAME_CTID"
 }
 
 service_create() {
