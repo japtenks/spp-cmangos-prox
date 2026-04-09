@@ -3073,6 +3073,7 @@ install_world() {
       export MYSQL_PWD='${DB_LAN_PASS}'
       ASSET_BASE='/opt/spp-assets/vmangos/sql'
       SQL_BASE='/opt/source/sql'
+      PLAYERBOT_SQL_BASE='/opt/source/src/game/PlayerBots/sql'
       TMP_DIR='/tmp/vmangos-sql'
       DEFAULT_WORLD_URL='${VMANGOS_WORLD_DB_URL}'
       MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
@@ -3144,6 +3145,20 @@ install_world() {
         echo \"[\$(date '+%F %T')] Applying world override \$WORLD_OVERRIDE_INDEX/\$WORLD_OVERRIDE_TOTAL: \$(basename \"\$f\")\"
         [[ -f \"\$f\" ]] && mariadb \"\${MYSQL_ARGS[@]}\" '${WORLD_DB}' < \"\$f\"
       done
+
+      mapfile -t PLAYERBOT_WORLD_SQL < <(
+        {
+          find \"\$PLAYERBOT_SQL_BASE/world\" -maxdepth 1 -type f -name '*.sql' 2>/dev/null
+          find \"\$PLAYERBOT_SQL_BASE/world/classic\" -maxdepth 1 -type f -name '*.sql' 2>/dev/null
+        } | sort
+      )
+      PLAYERBOT_WORLD_TOTAL=\${#PLAYERBOT_WORLD_SQL[@]}
+      PLAYERBOT_WORLD_INDEX=0
+      for f in \"\${PLAYERBOT_WORLD_SQL[@]}\"; do
+        PLAYERBOT_WORLD_INDEX=\$((PLAYERBOT_WORLD_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying playerbot world SQL \$PLAYERBOT_WORLD_INDEX/\$PLAYERBOT_WORLD_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${WORLD_DB}' < \"\$f\"
+      done
     "; then
       echo "DB installed successfully."
     else
@@ -3208,6 +3223,7 @@ install_char() {
       set -euo pipefail
       export MYSQL_PWD='${DB_LAN_PASS}'
       SQL_BASE='/opt/source/sql'
+      PLAYERBOT_SQL_BASE='/opt/source/src/game/PlayerBots/sql/characters'
       MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
 
       echo \"[\$(date '+%F %T')] Importing characters base: characters.sql\"
@@ -3233,6 +3249,15 @@ install_char() {
       for f in \"\${CHARACTER_OVERRIDES[@]}\"; do
         CHARACTER_OVERRIDE_INDEX=\$((CHARACTER_OVERRIDE_INDEX + 1))
         echo \"[\$(date '+%F %T')] Applying characters override \$CHARACTER_OVERRIDE_INDEX/\$CHARACTER_OVERRIDE_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${CHAR_DB_NAME}' < \"\$f\"
+      done
+
+      mapfile -t PLAYERBOT_CHARACTER_SQL < <(find \"\$PLAYERBOT_SQL_BASE\" -maxdepth 1 -type f -name '*.sql' 2>/dev/null | sort)
+      PLAYERBOT_CHARACTER_TOTAL=\${#PLAYERBOT_CHARACTER_SQL[@]}
+      PLAYERBOT_CHARACTER_INDEX=0
+      for f in \"\${PLAYERBOT_CHARACTER_SQL[@]}\"; do
+        PLAYERBOT_CHARACTER_INDEX=\$((PLAYERBOT_CHARACTER_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying playerbot characters SQL \$PLAYERBOT_CHARACTER_INDEX/\$PLAYERBOT_CHARACTER_TOTAL: \$(basename \"\$f\")\"
         mariadb \"\${MYSQL_ARGS[@]}\" '${CHAR_DB_NAME}' < \"\$f\"
       done
   "; then
