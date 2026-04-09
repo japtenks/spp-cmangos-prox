@@ -4080,10 +4080,26 @@ install_data() {
 
   if is_vmangos; then
     local ASSET_DIR="/opt/spp-assets/vmangos/data"
+    local FALLBACK_ASSET_DIR="/opt/spp-assets/vanilla/data"
 
     pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
-      test -d '$ASSET_DIR'
+      if [[ ! -d '$ASSET_DIR' ]]; then
+        if [[ -d '$FALLBACK_ASSET_DIR' ]]; then
+          echo 'vMaNGOS data pack missing; seeding from local Classic asset pack...'
+          mkdir -p '$ASSET_DIR'
+          rsync -a '$FALLBACK_ASSET_DIR/' '$ASSET_DIR/'
+        else
+          echo 'Missing /opt/spp-assets/vmangos/data and no local Classic asset pack found at /opt/spp-assets/vanilla/data.'
+          exit 1
+        fi
+      fi
+      for required_dir in dbc maps vmaps mmaps; do
+        if [[ ! -d '$ASSET_DIR/'\"\$required_dir\" ]]; then
+          echo \"Missing required vMaNGOS data directory: $ASSET_DIR/\$required_dir\"
+          exit 1
+        fi
+      done
       mkdir -p '$INSTALL_DIR/data'
       rsync -a --delete '$ASSET_DIR/' '$INSTALL_DIR/data/'
     "
