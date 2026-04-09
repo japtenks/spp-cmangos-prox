@@ -60,7 +60,10 @@ Status: `Confirmed`
 - The launcher vmangos data install path now auto-seeds `/opt/spp-assets/vmangos/data/` from `/opt/spp-assets/vanilla/data/` when no dedicated vmangos asset pack exists locally; if neither exists, it downloads the same `vanilla.7z` Classic data pack used by the SPP Classic lane, then validates `dbc`, `maps`, `vmaps`, and `mmaps` before copying into `/srv/vmangos/data/`.
 - On `ser8`, launcher-managed vmangos DB install completed through world, characters, logs, and dedicated `vmangosrealmd`, including bot rotation setup.
 - Manual runtime smoke testing on `ser8` confirmed `realmd` starts cleanly against `vmangosrealmd`.
-- Manual runtime smoke testing on `ser8` also confirmed `mangosd` reaches world startup, but runtime still needs launcher parity fixes for data layout and playerbot schema import.
+- Manual runtime smoke testing on `ser8` also confirmed `mangosd` reaches world startup, and world entry has succeeded at least once.
+- Current runtime instability is now in playerbot code during bot runtime/login handling, not in login/account flow.
+- Website-side vmangos account transfer has been validated far enough to count as working for the current lane.
+- Runtime still needs launcher parity fixes for data layout, especially the remaining mmap format mismatch (`generator v8` pack staged, fork expects `generator v6`).
 
 ## Confirmed Findings
 
