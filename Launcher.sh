@@ -3059,6 +3059,7 @@ install_world() {
       SQL_BASE='/opt/source/sql'
       TMP_DIR='/tmp/vmangos-sql'
       DEFAULT_WORLD_URL='${VMANGOS_WORLD_DB_URL}'
+      MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
       mkdir -p \"\$ASSET_BASE\"
       mkdir -p \"\$TMP_DIR\"
       rm -rf \"\$TMP_DIR/extracted\"
@@ -3103,18 +3104,29 @@ install_world() {
         exit 1
       fi
 
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
+      echo \"[\$(date '+%F %T')] Importing world base: \$(basename \"\$WORLD_SQL\")\"
+      mariadb \"\${MYSQL_ARGS[@]}\" -e \"
         DROP DATABASE IF EXISTS ${WORLD_DB};
         CREATE DATABASE ${WORLD_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$WORLD_SQL\"
+      mariadb \"\${MYSQL_ARGS[@]}\" '${WORLD_DB}' < \"\$WORLD_SQL\"
 
-      for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_world.sql' | sort); do
-        mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"
+      mapfile -t WORLD_MIGRATIONS < <(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_world.sql' | sort)
+      WORLD_TOTAL=\${#WORLD_MIGRATIONS[@]}
+      WORLD_INDEX=0
+      for f in \"\${WORLD_MIGRATIONS[@]}\"; do
+        WORLD_INDEX=\$((WORLD_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying world migration \$WORLD_INDEX/\$WORLD_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${WORLD_DB}' < \"\$f\"
       done
 
-      for f in \"\$ASSET_BASE/world\"/*.sql; do
-        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${WORLD_DB}' < \"\$f\"
+      mapfile -t WORLD_OVERRIDES < <(find \"\$ASSET_BASE/world\" -maxdepth 1 -type f -name '*.sql' 2>/dev/null | sort)
+      WORLD_OVERRIDE_TOTAL=\${#WORLD_OVERRIDES[@]}
+      WORLD_OVERRIDE_INDEX=0
+      for f in \"\${WORLD_OVERRIDES[@]}\"; do
+        WORLD_OVERRIDE_INDEX=\$((WORLD_OVERRIDE_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying world override \$WORLD_OVERRIDE_INDEX/\$WORLD_OVERRIDE_TOTAL: \$(basename \"\$f\")\"
+        [[ -f \"\$f\" ]] && mariadb \"\${MYSQL_ARGS[@]}\" '${WORLD_DB}' < \"\$f\"
       done
     "; then
       echo "DB installed successfully."
@@ -3176,25 +3188,37 @@ install_char() {
  if is_vmangos; then
   resolve_vmangos_db_endpoint || return 1
 
-  if pct exec "$GAME_CTID" -- bash -c "
-    set -euo pipefail
-    export MYSQL_PWD='${DB_LAN_PASS}'
-    SQL_BASE='/opt/source/sql'
+    if pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      export MYSQL_PWD='${DB_LAN_PASS}'
+      SQL_BASE='/opt/source/sql'
+      MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
 
-    mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
-      DROP DATABASE IF EXISTS ${CHAR_DB_NAME};
-      CREATE DATABASE ${CHAR_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-    \"
+      echo \"[\$(date '+%F %T')] Importing characters base: characters.sql\"
+      mariadb \"\${MYSQL_ARGS[@]}\" -e \"
+        DROP DATABASE IF EXISTS ${CHAR_DB_NAME};
+        CREATE DATABASE ${CHAR_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      \"
 
-    mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$SQL_BASE/characters.sql\"
+      mariadb \"\${MYSQL_ARGS[@]}\" '${CHAR_DB_NAME}' < \"\$SQL_BASE/characters.sql\"
 
-    for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_characters.sql' | sort); do
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
-    done
+      mapfile -t CHARACTER_MIGRATIONS < <(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_characters.sql' | sort)
+      CHARACTER_TOTAL=\${#CHARACTER_MIGRATIONS[@]}
+      CHARACTER_INDEX=0
+      for f in \"\${CHARACTER_MIGRATIONS[@]}\"; do
+        CHARACTER_INDEX=\$((CHARACTER_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying characters migration \$CHARACTER_INDEX/\$CHARACTER_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${CHAR_DB_NAME}' < \"\$f\"
+      done
 
-    for f in /opt/spp-assets/vmangos/sql/characters/*.sql; do
-      [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${CHAR_DB_NAME}' < \"\$f\"
-    done
+      mapfile -t CHARACTER_OVERRIDES < <(find /opt/spp-assets/vmangos/sql/characters -maxdepth 1 -type f -name '*.sql' 2>/dev/null | sort)
+      CHARACTER_OVERRIDE_TOTAL=\${#CHARACTER_OVERRIDES[@]}
+      CHARACTER_OVERRIDE_INDEX=0
+      for f in \"\${CHARACTER_OVERRIDES[@]}\"; do
+        CHARACTER_OVERRIDE_INDEX=\$((CHARACTER_OVERRIDE_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying characters override \$CHARACTER_OVERRIDE_INDEX/\$CHARACTER_OVERRIDE_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${CHAR_DB_NAME}' < \"\$f\"
+      done
   "; then
     echo "DB installed successfully."
   else
@@ -3258,16 +3282,23 @@ install_logs() {
       set -euo pipefail
       export MYSQL_PWD='${DB_LAN_PASS}'
       SQL_BASE='/opt/source/sql'
+      MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
 
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
+      echo \"[\$(date '+%F %T')] Importing logs base: logs.sql\"
+      mariadb \"\${MYSQL_ARGS[@]}\" -e \"
         DROP DATABASE IF EXISTS ${LOG_DB_NAME};
         CREATE DATABASE ${LOG_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
 
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$SQL_BASE/logs.sql\"
+      mariadb \"\${MYSQL_ARGS[@]}\" '${LOG_DB_NAME}' < \"\$SQL_BASE/logs.sql\"
 
-      for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logs.sql' | sort); do
-        mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${LOG_DB_NAME}' < \"\$f\"
+      mapfile -t LOG_MIGRATIONS < <(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logs.sql' | sort)
+      LOG_TOTAL=\${#LOG_MIGRATIONS[@]}
+      LOG_INDEX=0
+      for f in \"\${LOG_MIGRATIONS[@]}\"; do
+        LOG_INDEX=\$((LOG_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying logs migration \$LOG_INDEX/\$LOG_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${LOG_DB_NAME}' < \"\$f\"
       done
     "; then
       echo "Logs DB installed successfully."
@@ -3791,20 +3822,32 @@ install_realm() {
       set -euo pipefail
       export MYSQL_PWD='${DB_LAN_PASS}'
       SQL_BASE='/opt/source/sql'
+      MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
 
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' -e \"
+      echo \"[\$(date '+%F %T')] Importing logon base: logon.sql\"
+      mariadb \"\${MYSQL_ARGS[@]}\" -e \"
         DROP DATABASE IF EXISTS ${REALM_DB_NAME};
         CREATE DATABASE ${REALM_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       \"
 
-      mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$SQL_BASE/logon.sql\"
+      mariadb \"\${MYSQL_ARGS[@]}\" '${REALM_DB_NAME}' < \"\$SQL_BASE/logon.sql\"
 
-      for f in \$(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logon.sql' | sort); do
-        mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
+      mapfile -t LOGON_MIGRATIONS < <(find \"\$SQL_BASE/migrations\" -maxdepth 1 -type f -name '*_logon.sql' | sort)
+      LOGON_TOTAL=\${#LOGON_MIGRATIONS[@]}
+      LOGON_INDEX=0
+      for f in \"\${LOGON_MIGRATIONS[@]}\"; do
+        LOGON_INDEX=\$((LOGON_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying logon migration \$LOGON_INDEX/\$LOGON_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${REALM_DB_NAME}' < \"\$f\"
       done
 
-      for f in /opt/spp-assets/vmangos/sql/logon/*.sql; do
-        [[ -f \"\$f\" ]] && mariadb --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}' '${REALM_DB_NAME}' < \"\$f\"
+      mapfile -t LOGON_OVERRIDES < <(find /opt/spp-assets/vmangos/sql/logon -maxdepth 1 -type f -name '*.sql' 2>/dev/null | sort)
+      LOGON_OVERRIDE_TOTAL=\${#LOGON_OVERRIDES[@]}
+      LOGON_OVERRIDE_INDEX=0
+      for f in \"\${LOGON_OVERRIDES[@]}\"; do
+        LOGON_OVERRIDE_INDEX=\$((LOGON_OVERRIDE_INDEX + 1))
+        echo \"[\$(date '+%F %T')] Applying logon override \$LOGON_OVERRIDE_INDEX/\$LOGON_OVERRIDE_TOTAL: \$(basename \"\$f\")\"
+        mariadb \"\${MYSQL_ARGS[@]}\" '${REALM_DB_NAME}' < \"\$f\"
       done
     "; then
       echo "Realm DB installed successfully."
