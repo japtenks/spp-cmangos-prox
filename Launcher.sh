@@ -3500,7 +3500,7 @@ vmangos_pull_source_tree() {
 }
 
 vmangos_build_extractors_flag() {
-  if pct exec "$GAME_CTID" -- test -x "$INSTALL_DIR/bin/mangosd"; then
+  if pct exec "$GAME_CTID" -- test -x "$INSTALL_DIR/bin/realmd"; then
     echo "OFF"
   else
     echo "ON"
