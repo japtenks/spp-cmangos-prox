@@ -406,7 +406,7 @@ This area covers:
 - supported
 - separate install path
 - dedicated realm DB behavior by default, with optional shared-`realmd` convergence mode
-- launcher source selection supports `VMANGOS_REPO_URL` and `VMANGOS_GIT_BRANCH`
+- launcher source selection supports per-lane pins for bridge and AhBot builds
 - separate DB endpoint support exists in the launcher
 - dedicated data pack URL support exists in the launcher via `VMANGOS_DATA_PACK_URL`
 - database install is substantial and may take a while to complete
@@ -427,8 +427,8 @@ Keep two standard WSL validation lanes distinct when preparing a branch for laun
 Example WSL configure/build commands for the true debug lane:
 
 ```powershell
-wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-catchup cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DBUILD_PLAYERBOTS=ON
-wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-catchup cmake --build build-debug --target mangosd -- -j8
+wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-main cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DBUILD_PLAYERBOTS=ON
+wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-main cmake --build build-debug --target mangosd -- -j8
 ```
 
 ### vMaNGOS branch-to-launcher handoff
@@ -439,17 +439,17 @@ The intended workflow is:
    Use the lane that matches the goal:
    - `RelWithDebInfo + BUILD_PLAYERBOTS=ON` for normal bridge validation
    - `Debug + BUILD_PLAYERBOTS=ON` for launcher/crash-analysis repro work
-2. Pin that candidate in `config.env` with:
-   - `VMANGOS_REPO_URL`
-   - `VMANGOS_GIT_BRANCH`
+2. Pin that candidate in `config.env` with the lane that matches the build target:
+   - bridge builds: `VMANGOS_MAIN_REPO_URL` and `VMANGOS_MAIN_GIT_BRANCH`
+   - AhBot builds: `VMANGOS_AHBOT_REPO_URL` and `VMANGOS_AHBOT_GIT_BRANCH`
 3. Run the launcher vMaNGOS test build or full install.
-4. Switch the pin back to your stable integration branch when live validation is complete.
+4. Switch the pin back to your stable bridge or AhBot branch when live validation is complete.
 
 You can edit the pin from the launcher at:
 
 - `Maintenance -> Config Settings -> vMaNGOS Source Pin`
 
-If those values are unset, the launcher falls back to the default vMaNGOS fork and branch.
+If those values are unset, the launcher falls back to the default bridge lane (`bridge`) for main builds and the default AhBot lane (`codex/ahbot-next`) for AhBot builds.
 
 ### WotLK
 

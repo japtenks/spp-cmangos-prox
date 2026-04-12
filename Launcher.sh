@@ -4,8 +4,10 @@ DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_LAUNCHER_VERSION="22"
 DEFAULT_CRASH_SHARE_ROOT="/mnt/fast/crashlogs"
-DEFAULT_VMANGOS_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
-DEFAULT_VMANGOS_BRIDGE_BRANCH="codex/vmangos-playerbots-catchup"
+DEFAULT_VMANGOS_BRIDGE_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
+DEFAULT_VMANGOS_AHBOT_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
+DEFAULT_VMANGOS_REPO_URL="$DEFAULT_VMANGOS_BRIDGE_REPO_URL"
+DEFAULT_VMANGOS_BRIDGE_BRANCH="bridge"
 DEFAULT_VMANGOS_AHBOT_BRANCH="codex/ahbot-next"
 
 # -------------------------
@@ -171,11 +173,11 @@ normalize_config_env() {
 
   append_config_default_line "VMANGOS_INSTANCE_NAMES" '("main" "ahbot")'
   append_config_default_line "IP_VMANGOS" '""'
-  append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_REPO_URL}\""
+  append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
   append_config_default_line "VMANGOS_GIT_BRANCH" "\"${DEFAULT_VMANGOS_BRIDGE_BRANCH}\""
-  append_config_default_line "VMANGOS_MAIN_REPO_URL" "\"${DEFAULT_VMANGOS_REPO_URL}\""
+  append_config_default_line "VMANGOS_MAIN_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
   append_config_default_line "VMANGOS_MAIN_GIT_BRANCH" "\"${DEFAULT_VMANGOS_BRIDGE_BRANCH}\""
-  append_config_default_line "VMANGOS_AHBOT_REPO_URL" "\"${DEFAULT_VMANGOS_REPO_URL}\""
+  append_config_default_line "VMANGOS_AHBOT_REPO_URL" "\"${DEFAULT_VMANGOS_AHBOT_REPO_URL}\""
   append_config_default_line "VMANGOS_AHBOT_GIT_BRANCH" "\"${DEFAULT_VMANGOS_AHBOT_BRANCH}\""
   append_config_default_line "VMANGOS_DB_HOST" '""'
   append_config_default_line "VMANGOS_DB_PORT" '"3306"'
@@ -752,7 +754,11 @@ vmangos_instance_label() {
 }
 
 vmangos_default_repo() {
-  printf '%s' "$DEFAULT_VMANGOS_REPO_URL"
+  if vmangos_is_main_target "${1:-$EXPANSION}"; then
+    printf '%s' "$DEFAULT_VMANGOS_BRIDGE_REPO_URL"
+  else
+    printf '%s' "$DEFAULT_VMANGOS_AHBOT_REPO_URL"
+  fi
 }
 
 vmangos_default_branch() {
@@ -3569,7 +3575,8 @@ vmangos_run_lane_action() {
   ensure_vmangos_build_deps
 
   local action="$1"
-  local repo="$DEFAULT_VMANGOS_REPO_URL"
+  local repo
+  repo=$(vmangos_default_repo "$EXPANSION")
   local branch="$DEFAULT_VMANGOS_BRIDGE_BRANCH"
   local build_type="Release"
   local build_dir_name="build"
@@ -3590,7 +3597,7 @@ vmangos_run_lane_action() {
       ;;
     ahbot-release)
       vmangos_prompt_source_values \
-        "$DEFAULT_VMANGOS_REPO_URL" \
+        "$(vmangos_default_repo "$EXPANSION")" \
         "$DEFAULT_VMANGOS_AHBOT_BRANCH" \
         "AhBot preset lane for $(expansion_title "$EXPANSION"):"
       repo="$VMANGOS_PROMPTED_REPO"
