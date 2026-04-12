@@ -906,10 +906,15 @@ vmangos_default_branch() {
 }
 
 vmangos_build_lane_label() {
-  if vmangos_is_main_target "${1:-$EXPANSION}"; then
-    echo "realm owner"
+  local target="${1:-$EXPANSION}"
+  local branch
+  branch=$(expansion_branch "$target" 2>/dev/null || vmangos_default_branch "$target")
+  if [[ "$branch" == "$DEFAULT_VMANGOS_BRIDGE_BRANCH" ]]; then
+    echo "compatibility bridge"
+  elif [[ "$branch" == "$DEFAULT_VMANGOS_AHBOT_BRANCH" ]]; then
+    echo "ahbot preset"
   else
-    echo "shared vMaNGOS instance"
+    echo "custom vMaNGOS lane"
   fi
 }
 
@@ -991,10 +996,6 @@ expansion_repo() {
     wotlk) echo "https://github.com/celguar/mangos-wotlk.git" ;;
     vmangos|vmangos-*)
       default_repo=$(vmangos_default_repo "$1")
-      if vmangos_is_main_target "$1"; then
-        echo "$default_repo"
-        return 0
-      fi
       repo_var=$(vmangos_repo_var_name "$1")
       echo "${!repo_var:-$default_repo}"
       ;;
@@ -1009,10 +1010,6 @@ expansion_branch() {
     classic|tbc|wotlk) echo "ike3-bots" ;;
     vmangos|vmangos-*)
       default_branch=$(vmangos_default_branch "$1")
-      if vmangos_is_main_target "$1"; then
-        echo "$default_branch"
-        return 0
-      fi
       branch_var=$(vmangos_branch_var_name "$1")
       echo "${!branch_var:-$default_branch}"
       ;;
@@ -2655,12 +2652,13 @@ edit_vmangos_instance_names() {
 }
 
 edit_vmangos_source_pin() {
-  local REPO_VAR
-  local BRANCH_VAR
   local DEFAULT_REPO
   local DEFAULT_BRANCH
-  DEFAULT_REPO="${DEFAULT_VMANGOS_REPO_URL}"
-  DEFAULT_BRANCH="${DEFAULT_VMANGOS_GIT_BRANCH}"
+  DEFAULT_REPO=$(vmangos_default_repo "$EXPANSION")
+  DEFAULT_BRANCH=$(vmangos_default_branch "$EXPANSION")
+
+  local REPO_VAR
+  local BRANCH_VAR
   REPO_VAR=$(vmangos_repo_var_name "$EXPANSION")
   BRANCH_VAR=$(vmangos_branch_var_name "$EXPANSION")
   local CURRENT_REPO
@@ -2671,7 +2669,7 @@ edit_vmangos_source_pin() {
 
   echo
   echo "Current $(expansion_title "$EXPANSION") source pin:"
-  echo "  Role: $(vmangos_build_lane_label "$EXPANSION")"
+  echo "  Layer: $(vmangos_build_lane_label "$EXPANSION")"
   echo "  Repo: ${CURRENT_REPO}"
   echo "  Branch: ${CURRENT_BRANCH}"
   echo
@@ -2699,6 +2697,12 @@ edit_vmangos_source_pin() {
 
   set_or_append_config_line "$REPO_VAR" "\"${!REPO_VAR}\""
   set_or_append_config_line "$BRANCH_VAR" "\"${!BRANCH_VAR}\""
+  if vmangos_is_main_target "$EXPANSION"; then
+    VMANGOS_REPO_URL="${!REPO_VAR}"
+    VMANGOS_GIT_BRANCH="${!BRANCH_VAR}"
+    set_or_append_config_line "VMANGOS_REPO_URL" "\"${VMANGOS_REPO_URL}\""
+    set_or_append_config_line "VMANGOS_GIT_BRANCH" "\"${VMANGOS_GIT_BRANCH}\""
+  fi
 
   persist_config_storage || {
     echo "Failed to save $(expansion_title "$EXPANSION") source pin."
@@ -3456,11 +3460,16 @@ core_menu() {
     echo
     echo "Core Maintenance"
     echo
-    echo "1 - Clean Rebuild"
-    echo "2 - Incremental Update"
-    echo "3 - Configure Modules"
     if is_vmangos; then
-      echo "4 - Test Build"
+      echo "1 - Bridge Clean Rebuild (Release)"
+      echo "2 - Bridge Pull + Rebuild (Release)"
+      echo "3 - Configure Modules (Unavailable for vMaNGOS)"
+      echo "4 - Bridge Debug Build"
+      echo "5 - AhBot Preset Build (Release)"
+    else
+      echo "1 - Clean Rebuild"
+      echo "2 - Incremental Update"
+      echo "3 - Configure Modules"
     fi
     echo "0 - Back"
     echo
@@ -3469,33 +3478,72 @@ core_menu() {
 
     case "$CORE" in
       1)
-        read -p "Confirm rebuild? (Y/N): " CONFIRM
-        if [[ "${CONFIRM^^}" == "Y" ]]; then
-          require_existing_game_container || continue
-          pct exec "$GAME_CTID" -- rm -rf /opt/source
-          comp_server
-          echo
-          read -p "Core rebuild finished. Press Enter to continue..." _
+        if is_vmangos; then
+          read -p "Confirm bridge clean rebuild? (YES): " CONFIRM
+          if [[ "$CONFIRM" == "YES" ]]; then
+            require_existing_game_container || continue
+            vmangos_run_lane_action bridge-clean
+            echo
+            read -p "Bridge clean rebuild finished. Press Enter to continue..." _
+          fi
+        else
+          read -p "Confirm rebuild? (Y/N): " CONFIRM
+          if [[ "${CONFIRM^^}" == "Y" ]]; then
+            require_existing_game_container || continue
+            pct exec "$GAME_CTID" -- rm -rf /opt/source
+            comp_server
+            echo
+            read -p "Core rebuild finished. Press Enter to continue..." _
+          fi
         fi
         ;;
       2)
-        read -p "Confirm update? (YES): " CONFIRM
-        if [[ "$CONFIRM" == "YES" ]]; then
-          require_existing_game_container || continue
-          update_core
-          echo
-          read -p "Core update finished. Press Enter to continue..." _
-        fi
-        ;;
-      3) configure_modules ;;
-      4)
         if is_vmangos; then
-          read -p "Run vmangos test build? (YES): " CONFIRM
+          read -p "Confirm bridge pull + rebuild? (YES): " CONFIRM
           if [[ "$CONFIRM" == "YES" ]]; then
             require_existing_game_container || continue
-            test_build_vmangos
+            vmangos_run_lane_action bridge-update
             echo
-            read -p "vMaNGOS test build finished. Press Enter to continue..." _
+            read -p "Bridge pull + rebuild finished. Press Enter to continue..." _
+          fi
+        else
+          read -p "Confirm update? (YES): " CONFIRM
+          if [[ "$CONFIRM" == "YES" ]]; then
+            require_existing_game_container || continue
+            update_core
+            echo
+            read -p "Core update finished. Press Enter to continue..." _
+          fi
+        fi
+        ;;
+      3)
+        if is_vmangos; then
+          echo
+          echo "Module configuration is unavailable for vMaNGOS lanes."
+          read -p "Press Enter to continue..." _
+        else
+          configure_modules
+        fi
+        ;;
+      4)
+        if is_vmangos; then
+          read -p "Confirm bridge debug build? (YES): " CONFIRM
+          if [[ "$CONFIRM" == "YES" ]]; then
+            require_existing_game_container || continue
+            vmangos_run_lane_action bridge-debug
+            echo
+            read -p "Bridge debug build finished. Press Enter to continue..." _
+          fi
+        fi
+        ;;
+      5)
+        if is_vmangos; then
+          read -p "Confirm AhBot preset build? (YES): " CONFIRM
+          if [[ "$CONFIRM" == "YES" ]]; then
+            require_existing_game_container || continue
+            vmangos_run_lane_action ahbot-release
+            echo
+            read -p "AhBot preset build finished. Press Enter to continue..." _
           fi
         fi
         ;;
@@ -3632,56 +3680,233 @@ apply_vmangos_build_fix_patch() {
   "
 }
 
-test_build_vmangos() {
-  is_vmangos || return 1
-  derive_db_names || return 1
-  local REPO BRANCH
-  REPO=$(expansion_repo "$EXPANSION") || return 1
-  BRANCH=$(expansion_branch "$EXPANSION") || return 1
+vmangos_persist_source_pin() {
+  local target="${1:-$EXPANSION}"
+  local repo="$2"
+  local branch="$3"
+  local repo_var
+  local branch_var
 
-  ensure_vmangos_build_deps
+  repo_var=$(vmangos_repo_var_name "$target")
+  branch_var=$(vmangos_branch_var_name "$target")
+
+  printf -v "$repo_var" '%s' "$repo"
+  printf -v "$branch_var" '%s' "$branch"
+
+  set_or_append_config_line "$repo_var" "\"${!repo_var}\""
+  set_or_append_config_line "$branch_var" "\"${!branch_var}\""
+
+  if vmangos_is_main_target "$target"; then
+    VMANGOS_REPO_URL="$repo"
+    VMANGOS_GIT_BRANCH="$branch"
+    set_or_append_config_line "VMANGOS_REPO_URL" "\"${VMANGOS_REPO_URL}\""
+    set_or_append_config_line "VMANGOS_GIT_BRANCH" "\"${VMANGOS_GIT_BRANCH}\""
+  fi
+
+  persist_config_storage
+}
+
+vmangos_prompt_source_values() {
+  local default_repo="$1"
+  local default_branch="$2"
+  local prompt_label="$3"
+  local entered_repo entered_branch
+
+  echo
+  echo "${prompt_label}"
+  echo "Leave a field blank to accept the preset."
+  echo
+  read -p "Repo [${default_repo}]: " entered_repo
+  read -p "Branch [${default_branch}]: " entered_branch
+
+  VMANGOS_PROMPTED_REPO="${entered_repo:-$default_repo}"
+  VMANGOS_PROMPTED_BRANCH="${entered_branch:-$default_branch}"
+}
+
+vmangos_prepare_source_tree() {
+  local repo="$1"
+  local branch="$2"
+  local clean_mode="${3:-0}"
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
     cd /opt
 
+    if [[ '$clean_mode' == '1' ]]; then
+      rm -rf source
+    fi
+
     if [[ -d source/.git ]]; then
-      echo 'Resetting existing vMaNGOS core for test build...'
+      echo 'Refreshing existing vMaNGOS source tree...'
       cd source
+      git remote set-url origin '$repo'
       git fetch origin
-      git checkout '$BRANCH'
-      git reset --hard "origin/$BRANCH"
+      git checkout '$branch' || git checkout -B '$branch' 'origin/$branch'
+      git reset --hard 'origin/$branch'
       git clean -fd
     else
-      echo 'Cloning fresh vMaNGOS core for test build...'
-      git clone '$REPO' source
+      echo 'Cloning vMaNGOS source tree...'
+      git clone '$repo' source
       cd source
-      git checkout '$BRANCH'
+      git checkout '$branch' || git checkout -B '$branch' 'origin/$branch'
     fi
   "
+}
 
-  apply_vmangos_build_fix_patch
+vmangos_pull_source_tree() {
+  local repo="$1"
+  local branch="$2"
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
-    if [[ -x '$INSTALL_DIR/bin/mangosd' ]]; then
-      BUILD_EXTRACTORS_FLAG=OFF
-      echo 'Existing vMaNGOS install detected; skipping extractor build.'
-    else
-      BUILD_EXTRACTORS_FLAG=ON
-      echo 'First vMaNGOS build detected; enabling extractor build.'
+    cd /opt
+
+    if [[ ! -d source/.git ]]; then
+      echo 'No existing vMaNGOS source tree found; cloning fresh.'
+      git clone '$repo' source
+      cd source
+      git checkout '$branch' || git checkout -B '$branch' 'origin/$branch'
+      exit 0
     fi
-    rm -rf /opt/source/build-test
-    mkdir -p /opt/source/build-test
-    cd /opt/source/build-test
-    cmake .. \
-      -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      -DBUILD_EXTRACTORS=\$BUILD_EXTRACTORS_FLAG \
-      -DBUILD_PLAYERBOTS=ON \
-      -DSUPPORTED_CLIENT_BUILD=5875
-    make -j\$(nproc)
+
+    cd source
+    git remote set-url origin '$repo'
+    git fetch origin
+    git checkout '$branch' || git checkout -B '$branch' 'origin/$branch'
+    git pull --ff-only origin '$branch'
   "
+}
+
+vmangos_build_extractors_flag() {
+  if pct exec "$GAME_CTID" -- test -x "$INSTALL_DIR/bin/mangosd"; then
+    echo "OFF"
+  else
+    echo "ON"
+  fi
+}
+
+vmangos_configure_build_dir() {
+  local build_type="$1"
+  local build_dir_name="$2"
+  local reconfigure_mode="${3:-fresh}"
+  local extractors_flag="$4"
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    BUILD_DIR='/opt/source/${build_dir_name}'
+
+    configure_lane() {
+      mkdir -p \"\$BUILD_DIR\"
+      cd \"\$BUILD_DIR\"
+      cmake .. \
+        -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+        -DCMAKE_BUILD_TYPE=${build_type} \
+        -DBUILD_EXTRACTORS=${extractors_flag} \
+        -DBUILD_PLAYERBOTS=ON \
+        -DSUPPORTED_CLIENT_BUILD=5875
+    }
+
+    if [[ '${reconfigure_mode}' == 'fresh' ]]; then
+      rm -rf \"\$BUILD_DIR\"
+    fi
+
+    if [[ '${reconfigure_mode}' == 'fallback' ]]; then
+      if ! configure_lane; then
+        echo 'Existing vMaNGOS build directory is invalid; wiping and reconfiguring.'
+        rm -rf \"\$BUILD_DIR\"
+        configure_lane
+      fi
+    else
+      configure_lane
+    fi
+  "
+}
+
+vmangos_install_build_dir() {
+  local build_dir_name="$1"
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd '/opt/source/${build_dir_name}'
+    make -j\$(nproc)
+    make install
+    mkdir -p /var/log/mangos/
+    cd '$INSTALL_DIR/etc' || exit 1
+
+    for f in *.conf.dist; do
+      base=\${f%.dist}
+      [[ -f \$base ]] && continue
+      cp \$f \$base
+    done
+  "
+}
+
+vmangos_run_lane_action() {
+  is_vmangos || return 1
+  derive_db_names || return 1
+  ensure_vmangos_build_deps
+
+  local action="$1"
+  local repo="$DEFAULT_VMANGOS_REPO_URL"
+  local branch="$DEFAULT_VMANGOS_BRIDGE_BRANCH"
+  local build_type="Release"
+  local build_dir_name="build"
+  local reconfigure_mode="fresh"
+  local clean_source=0
+  local extractors_flag
+
+  case "$action" in
+    bridge-clean)
+      clean_source=1
+      ;;
+    bridge-update)
+      reconfigure_mode="fallback"
+      ;;
+    bridge-debug)
+      build_type="Debug"
+      build_dir_name="build-debug"
+      ;;
+    ahbot-release)
+      vmangos_prompt_source_values \
+        "$DEFAULT_VMANGOS_REPO_URL" \
+        "$DEFAULT_VMANGOS_AHBOT_BRANCH" \
+        "AhBot preset lane for $(expansion_title "$EXPANSION"):"
+      repo="$VMANGOS_PROMPTED_REPO"
+      branch="$VMANGOS_PROMPTED_BRANCH"
+      ;;
+    *)
+      echo "Unknown vMaNGOS lane action: $action"
+      return 1
+      ;;
+  esac
+
+  vmangos_persist_source_pin "$EXPANSION" "$repo" "$branch" || {
+    echo "Failed to persist the selected vMaNGOS source pin."
+    return 1
+  }
+
+  if [[ "$action" == "bridge-update" ]]; then
+    vmangos_pull_source_tree "$repo" "$branch" || return 1
+  else
+    vmangos_prepare_source_tree "$repo" "$branch" "$clean_source" || return 1
+  fi
+
+  apply_vmangos_build_fix_patch || return 1
+  extractors_flag=$(vmangos_build_extractors_flag)
+
+  stop_mangosd_managed "vmangos-lane-build"
+  vmangos_configure_build_dir "$build_type" "$build_dir_name" "$reconfigure_mode" "$extractors_flag" || return 1
+  vmangos_install_build_dir "$build_dir_name" || return 1
+  start_mangosd_managed "vmangos-lane-build"
+
+  update_core_metadata
+  update_db_conf
+  check_and_update_botconf
+}
+
+test_build_vmangos() {
+  is_vmangos || return 1
+  vmangos_run_lane_action bridge-debug
 }
 
 comp_server() {
@@ -3691,64 +3916,8 @@ comp_server() {
   BRANCH=$(expansion_branch "$EXPANSION") || return 1
 
   if is_vmangos; then
-    ensure_vmangos_build_deps
-
-    pct exec "$GAME_CTID" -- bash -c "
-      set -e
-      cd /opt
-
-      if [[ -d source/.git ]]; then
-        echo 'Resetting existing vMaNGOS core...'
-        cd source
-        git fetch origin
-        git checkout '$BRANCH'
-        git reset --hard "origin/$BRANCH"
-        git clean -fd
-      else
-        echo 'Cloning fresh vMaNGOS core...'
-        git clone '$REPO' source
-        cd source
-        git checkout '$BRANCH'
-      fi
-    "
-
-    apply_vmangos_build_fix_patch
-
-    pct exec "$GAME_CTID" -- bash -c "
-      set -e
-      if [[ -x '$INSTALL_DIR/bin/mangosd' ]]; then
-        BUILD_EXTRACTORS_FLAG=OFF
-        echo 'Existing vMaNGOS install detected; skipping extractor build.'
-      else
-        BUILD_EXTRACTORS_FLAG=ON
-        echo 'First vMaNGOS build detected; enabling extractor build.'
-      fi
-      cd /opt/source
-      rm -rf build
-      mkdir -p build
-      cd build
-      cmake .. \
-        -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DBUILD_EXTRACTORS=\$BUILD_EXTRACTORS_FLAG \
-        -DBUILD_PLAYERBOTS=ON \
-        -DSUPPORTED_CLIENT_BUILD=5875
-      make -j\$(nproc)
-      make install
-      mkdir -p /var/log/mangos/
-      cd '$INSTALL_DIR/etc' || exit 1
-
-      for f in *.conf.dist; do
-        base=\${f%.dist}
-        [[ -f \$base ]] && continue
-        cp \$f \$base
-      done
-    "
-
-    update_core_metadata
-    update_db_conf
-    check_and_update_botconf
-    return 0
+    vmangos_run_lane_action bridge-clean
+    return $?
   fi
 
   pct exec "$GAME_CTID" -- bash -c "
@@ -6057,6 +6226,15 @@ __SPP_CRASH_BUNDLE__
   mkdir -p "$HOST_SHARE_DIR"
   pct pull "$GAME_CTID" "$TAR_PATH" "$HOST_SHARE_PATH"
 
+  pct exec "$GAME_CTID" -- bash -c "
+    set -euo pipefail
+    mkdir -p '$TEXT_HISTORY_DIR'
+    for txt in '$BUNDLE_DIR'/*.txt; do
+      [[ -e \"\$txt\" ]] || continue
+      cp -f \"\$txt\" '$TEXT_HISTORY_DIR/${BUNDLE_NAME}_'\"\$(basename \"\$txt\")\"
+    done
+  "
+
   LOCAL_TAR_SIZE=$(pct exec "$GAME_CTID" -- stat -c %s "$TAR_PATH")
   HOST_TAR_SIZE=$(stat -c %s "$HOST_SHARE_PATH")
   if [[ "$LOCAL_TAR_SIZE" != "$HOST_TAR_SIZE" ]]; then
@@ -6076,6 +6254,7 @@ __SPP_CRASH_BUNDLE__
   echo "  Verified:  host copy matches local tarball size"
   echo "  Windows:   $WINDOWS_SHARE_PATH"
   echo "  WSL:       $WSL_SHARE_PATH"
+  echo "  Texts:     $TEXT_HISTORY_DIR"
   echo
   echo "Bundle contents:"
   echo "  crash_summary.txt"
@@ -6090,11 +6269,6 @@ __SPP_CRASH_BUNDLE__
   if [[ "$REMOVE_LOCAL_BUNDLE" =~ ^[Yy]$ ]]; then
     pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
-      mkdir -p '$TEXT_HISTORY_DIR'
-      for txt in '$BUNDLE_DIR'/*.txt; do
-        [[ -e \"\$txt\" ]] || continue
-        cp -f \"\$txt\" '$TEXT_HISTORY_DIR/${BUNDLE_NAME}_'\"\$(basename \"\$txt\")\"
-      done
       rm -f '$TAR_PATH'
       rm -rf '$BUNDLE_DIR'
     "
@@ -6109,8 +6283,11 @@ cleanup_local_crash_artifacts() {
   local HOST_CRASH_SHARE_DEFAULT="${CRASH_SHARE_ROOT:-$DEFAULT_CRASH_SHARE_ROOT}"
   local SHARE_DIR="${HOST_CRASH_SHARE_DEFAULT}/${EXPANSION}"
   local TEXT_HISTORY_DIR="$BIN_DIR/crash_text_history"
+  local UNVERIFIED_KEEP_COUNT=4
   local -a VERIFIED_BUNDLES=()
   local -a MISSING_BUNDLES=()
+  local -a RETAINED_UNVERIFIED_BUNDLES=()
+  local -a PRUNED_UNVERIFIED_BUNDLES=()
   local LOCAL_TAR LOCAL_NAME LOCAL_SIZE HOST_SIZE BUNDLE_DIR
 
   echo "=== Local crash artifacts in $BIN_DIR ==="
@@ -6163,9 +6340,10 @@ cleanup_local_crash_artifacts() {
     printf '  %s\n' "${MISSING_BUNDLES[@]}"
   fi
   echo
-  echo "This deletes local core files and any local crash bundle tarballs/directories"
-  echo "that were verified on the host share."
-  read -p "Type YES to delete local core files and verified local crash bundles from $BIN_DIR: " CONFIRM
+  echo "This moves local bundle text artifacts into $TEXT_HISTORY_DIR,"
+  echo "deletes local core files, removes any local crash bundles verified on the host share,"
+  echo "and keeps only the newest ${UNVERIFIED_KEEP_COUNT} unverified local tarballs."
+  read -p "Type YES to clean local crash files in $BIN_DIR: " CONFIRM
   [[ "$CONFIRM" == "YES" ]] || return
 
   pct exec "$GAME_CTID" -- bash -c "
@@ -6173,21 +6351,42 @@ cleanup_local_crash_artifacts() {
     shopt -s nullglob
     cd '$BIN_DIR'
     rm -f core.*
+    mkdir -p '$TEXT_HISTORY_DIR'
+    for bundle_dir in crash_bundle*; do
+      [[ -d \"\$bundle_dir\" ]] || continue
+      for txt in \"\$bundle_dir\"/*.txt; do
+        [[ -e \"\$txt\" ]] || continue
+        cp -f \"\$txt\" '$TEXT_HISTORY_DIR/'\"\${bundle_dir}_\$(basename \"\$txt\")\"
+      done
+    done
   "
 
   for LOCAL_NAME in "${VERIFIED_BUNDLES[@]}"; do
     BUNDLE_DIR="${LOCAL_NAME%.tar.gz}"
     pct exec "$GAME_CTID" -- bash -c "
       set -euo pipefail
-      mkdir -p '$TEXT_HISTORY_DIR'
-      for txt in '$BIN_DIR/$BUNDLE_DIR'/*.txt; do
-        [[ -e \"\$txt\" ]] || continue
-        cp -f \"\$txt\" '$TEXT_HISTORY_DIR/${BUNDLE_DIR}_'\"\$(basename \"\$txt\")\"
-      done
       rm -f '$BIN_DIR/$LOCAL_NAME'
       rm -rf '$BIN_DIR/$BUNDLE_DIR'
     "
   done
+
+  if [[ ${#MISSING_BUNDLES[@]} -gt 0 ]]; then
+    local idx=0
+    for LOCAL_NAME in "${MISSING_BUNDLES[@]}"; do
+      BUNDLE_DIR="${LOCAL_NAME%.tar.gz}"
+      if (( idx < UNVERIFIED_KEEP_COUNT )); then
+        RETAINED_UNVERIFIED_BUNDLES+=("$LOCAL_NAME")
+      else
+        PRUNED_UNVERIFIED_BUNDLES+=("$LOCAL_NAME")
+        pct exec "$GAME_CTID" -- bash -c "
+          set -euo pipefail
+          rm -f '$BIN_DIR/$LOCAL_NAME'
+          rm -rf '$BIN_DIR/$BUNDLE_DIR'
+        "
+      fi
+      idx=$((idx + 1))
+    done
+  fi
 
   pct exec "$GAME_CTID" -- df -h "$BIN_DIR"
   echo
@@ -6198,8 +6397,14 @@ cleanup_local_crash_artifacts() {
   else
     echo "No verified local crash bundle tarballs were removed."
   fi
-  if [[ ${#MISSING_BUNDLES[@]} -gt 0 ]]; then
-    echo "Unverified local crash bundles were left in place."
+  if [[ ${#PRUNED_UNVERIFIED_BUNDLES[@]} -gt 0 ]]; then
+    echo "Older unverified local crash bundles beyond the newest ${UNVERIFIED_KEEP_COUNT} were pruned."
+  fi
+  if [[ ${#RETAINED_UNVERIFIED_BUNDLES[@]} -gt 0 ]]; then
+    echo "Newest unverified local crash bundles were kept in place:"
+    printf '  %s\n' "${RETAINED_UNVERIFIED_BUNDLES[@]}"
+  elif [[ ${#MISSING_BUNDLES[@]} -gt 0 ]]; then
+    echo "No unverified local crash bundles were retained."
   fi
   read -p "Press Enter..." _
 }

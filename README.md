@@ -413,11 +413,32 @@ This area covers:
 
 For deeper vMaNGOS build and validation notes, see [VMANGOS_BUILD_CONTROL.md](./VMANGOS_BUILD_CONTROL.md).
 
+### vMaNGOS validation build lanes
+
+Keep two standard WSL validation lanes distinct when preparing a branch for launcher handoff:
+
+- `RelWithDebInfo + BUILD_PLAYERBOTS=ON`
+  - use this for normal bridge validation, install parity checks, and most crash triage
+  - this is optimized code with debug symbols, not a true `Debug` build
+- `Debug + BUILD_PLAYERBOTS=ON`
+  - use this for launcher repro work and crash-symbolization investigations where an actual debug build is required
+  - this distinction happens at `cmake` configure time, not only at build time
+
+Example WSL configure/build commands for the true debug lane:
+
+```powershell
+wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-catchup cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DBUILD_PLAYERBOTS=ON
+wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-catchup cmake --build build-debug --target mangosd -- -j8
+```
+
 ### vMaNGOS branch-to-launcher handoff
 
 The intended workflow is:
 
 1. Build and validate a vMaNGOS branch in WSL first.
+   Use the lane that matches the goal:
+   - `RelWithDebInfo + BUILD_PLAYERBOTS=ON` for normal bridge validation
+   - `Debug + BUILD_PLAYERBOTS=ON` for launcher/crash-analysis repro work
 2. Pin that candidate in `config.env` with:
    - `VMANGOS_REPO_URL`
    - `VMANGOS_GIT_BRANCH`
