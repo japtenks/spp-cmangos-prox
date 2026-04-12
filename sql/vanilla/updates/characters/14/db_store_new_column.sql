@@ -1,0 +1,3 @@
+ALTER TABLE IF EXISTS ai_playerbot_db_store
+ADD COLUMN IF NOT EXISTS preset VARCHAR(32)
+AFTER guid;
