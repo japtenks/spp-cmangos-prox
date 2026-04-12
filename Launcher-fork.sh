@@ -3628,6 +3628,7 @@ apply_vmangos_build_fix_patch() {
   is_vmangos || return 0
 
   local HOST_PATCH="${SCRIPT_DIR}/patches/vmangos/0001-vmangos-ike3-playerbots-build-fixes.patch"
+  local HOST_PATCH_FALLBACK="${SCRIPT_DIR}/.local/patches/vmangos/0001-vmangos-ike3-playerbots-build-fixes.patch"
   local CT_PATCH="/opt/spp-patches/vmangos/0001-vmangos-ike3-playerbots-build-fixes.patch"
   local BRANCH
   BRANCH=$(expansion_branch "$EXPANSION") || return 1
@@ -3637,10 +3638,34 @@ apply_vmangos_build_fix_patch() {
     return 0
   fi
 
-  [[ -f "$HOST_PATCH" ]] || {
-    echo "Missing vMaNGOS build-fix patch: $HOST_PATCH"
-    return 1
-  }
+  if [[ ! -f "$HOST_PATCH" && -f "$HOST_PATCH_FALLBACK" ]]; then
+    HOST_PATCH="$HOST_PATCH_FALLBACK"
+  fi
+
+  if [[ ! -f "$HOST_PATCH" ]]; then
+    pct exec "$GAME_CTID" -- bash -c "
+      set -e
+      cd /opt/source
+
+      patch_baseline_present() {
+        grep -Fq 'add_library(zlib INTERFACE)' CMakeLists.txt \
+          && grep -Fq '\${CMAKE_CURRENT_SOURCE_DIR}/PlayerBots' src/game/CMakeLists.txt \
+          && grep -Fq 'add_subdirectory(PlayerBots)' src/game/CMakeLists.txt \
+          && grep -Fq 'strnicmp(' src/game/PlayerBots/playerbot/PlayerbotAI.cpp \
+          && grep -Fq 'strnicmp(' src/game/PlayerBots/playerbot/strategy/actions/SayAction.cpp \
+          && grep -Fq '#define SUPPORTED_CLIENT_BUILD 5875' src/shared/Progression.h
+      }
+
+      if patch_baseline_present; then
+        echo 'Skipping legacy vMaNGOS build fix patch: patch file is absent, but the required compatibility baseline is already present.'
+        exit 0
+      fi
+
+      echo 'Missing vMaNGOS build-fix patch on launcher host, and the expected compatibility baseline was not detected in source.'
+      exit 1
+    "
+    return $?
+  fi
 
   pct exec "$GAME_CTID" -- mkdir -p /opt/spp-patches/vmangos
   pct push "$GAME_CTID" "$HOST_PATCH" "$CT_PATCH"
