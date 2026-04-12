@@ -5685,7 +5685,7 @@ server_info_menu() {
     echo "7 - Crash Logs"
     echo "8 - Analyze Crash (GDB)"
     echo "9 - Package Crash Bundle"
-    echo "10 - Clean Local Crash Artifacts"
+    echo "10 - Clean Cores + Verified Bundles"
     echo
     echo "0 - Back"
     echo
@@ -5897,6 +5897,7 @@ package_crash_bundle() {
   local HOST_CRASH_SHARE_DEFAULT="${CRASH_SHARE_ROOT:-$DEFAULT_CRASH_SHARE_ROOT}"
   local WINDOWS_CRASH_SHARE_DEFAULT='\\ser5\fast\crashlogs'
   local WSL_CRASH_SHARE_DEFAULT="/mnt/z/crashlogs"
+  local LOCAL_TAR_SIZE HOST_TAR_SIZE
 
   local CORES
   CORES=$(pct exec "$GAME_CTID" -- bash -c "
@@ -5915,7 +5916,7 @@ package_crash_bundle() {
   pct exec "$GAME_CTID" -- bash -c "ls -lht '$BIN_DIR'/core* 2>/dev/null"
   echo
 
-  local LATEST CORE_FILE CORE_BASENAME DEFAULT_BUNDLE_NAME BUNDLE_NAME BUNDLE_DIR TAR_PATH
+  local LATEST CORE_FILE CORE_BASENAME DEFAULT_BUNDLE_NAME BUNDLE_NAME BUNDLE_DIR TAR_PATH TEXT_HISTORY_DIR
   local HOST_SHARE_ROOT HOST_SHARE_DIR HOST_SHARE_PATH WINDOWS_SHARE_PATH WSL_SHARE_PATH
   LATEST=$(echo "$CORES" | head -1)
   read -p "Core file to package [$LATEST]: " CORE_FILE
@@ -5927,6 +5928,7 @@ package_crash_bundle() {
   BUNDLE_NAME="${BUNDLE_NAME:-$DEFAULT_BUNDLE_NAME}"
   BUNDLE_DIR="$BIN_DIR/$BUNDLE_NAME"
   TAR_PATH="$BIN_DIR/${BUNDLE_NAME}.tar.gz"
+  TEXT_HISTORY_DIR="$BIN_DIR/crash_text_history"
   HOST_SHARE_ROOT="$HOST_CRASH_SHARE_DEFAULT"
   HOST_SHARE_DIR="${HOST_SHARE_ROOT}/${EXPANSION}"
   HOST_SHARE_PATH="${HOST_SHARE_DIR}/${BUNDLE_NAME}.tar.gz"
@@ -6055,11 +6057,23 @@ __SPP_CRASH_BUNDLE__
   mkdir -p "$HOST_SHARE_DIR"
   pct pull "$GAME_CTID" "$TAR_PATH" "$HOST_SHARE_PATH"
 
+  LOCAL_TAR_SIZE=$(pct exec "$GAME_CTID" -- stat -c %s "$TAR_PATH")
+  HOST_TAR_SIZE=$(stat -c %s "$HOST_SHARE_PATH")
+  if [[ "$LOCAL_TAR_SIZE" != "$HOST_TAR_SIZE" ]]; then
+    echo
+    echo "Host copy verification failed for $HOST_SHARE_PATH."
+    echo "Local tarball size: $LOCAL_TAR_SIZE"
+    echo "Host tarball size:  $HOST_TAR_SIZE"
+    read -p "Press Enter..." _
+    return 1
+  fi
+
   echo
   echo "Crash bundle created:"
   echo "  Directory: $BUNDLE_DIR"
   echo "  Archive:   $TAR_PATH"
   echo "  Share:     $HOST_SHARE_PATH"
+  echo "  Verified:  host copy matches local tarball size"
   echo "  Windows:   $WINDOWS_SHARE_PATH"
   echo "  WSL:       $WSL_SHARE_PATH"
   echo
@@ -6070,6 +6084,22 @@ __SPP_CRASH_BUNDLE__
   echo "  mangosd"
   echo "  log_tail.txt"
   echo "  $(basename "$CORE_FILE")"
+  echo
+  read -p "Remove local bundle directory and tarball after verified host copy? [Y/n]: " REMOVE_LOCAL_BUNDLE
+  REMOVE_LOCAL_BUNDLE="${REMOVE_LOCAL_BUNDLE:-Y}"
+  if [[ "$REMOVE_LOCAL_BUNDLE" =~ ^[Yy]$ ]]; then
+    pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      mkdir -p '$TEXT_HISTORY_DIR'
+      for txt in '$BUNDLE_DIR'/*.txt; do
+        [[ -e \"\$txt\" ]] || continue
+        cp -f \"\$txt\" '$TEXT_HISTORY_DIR/${BUNDLE_NAME}_'\"\$(basename \"\$txt\")\"
+      done
+      rm -f '$TAR_PATH'
+      rm -rf '$BUNDLE_DIR'
+    "
+    echo "Copied bundle text artifacts to $TEXT_HISTORY_DIR and removed the local bundle directory and tarball."
+  fi
   read -p "Press Enter..." _
 }
 
@@ -6078,6 +6108,10 @@ cleanup_local_crash_artifacts() {
   local BIN_DIR="$INSTALL_DIR/bin"
   local HOST_CRASH_SHARE_DEFAULT="${CRASH_SHARE_ROOT:-$DEFAULT_CRASH_SHARE_ROOT}"
   local SHARE_DIR="${HOST_CRASH_SHARE_DEFAULT}/${EXPANSION}"
+  local TEXT_HISTORY_DIR="$BIN_DIR/crash_text_history"
+  local -a VERIFIED_BUNDLES=()
+  local -a MISSING_BUNDLES=()
+  local LOCAL_TAR LOCAL_NAME LOCAL_SIZE HOST_SIZE BUNDLE_DIR
 
   echo "=== Local crash artifacts in $BIN_DIR ==="
   pct exec "$GAME_CTID" -- bash -c "
@@ -6097,9 +6131,41 @@ cleanup_local_crash_artifacts() {
     echo "Host share directory does not exist yet: $SHARE_DIR"
   fi
   echo
-  echo "This deletes only local core files from the container."
-  echo "Crash bundle directories and crash bundle tarballs are left untouched."
-  read -p "Type YES to delete local core files from $BIN_DIR: " CONFIRM
+  echo "Text history folder: $TEXT_HISTORY_DIR"
+  echo
+
+  while IFS= read -r LOCAL_TAR; do
+    [[ -n "$LOCAL_TAR" ]] || continue
+    LOCAL_NAME=$(basename "$LOCAL_TAR")
+    LOCAL_SIZE=$(pct exec "$GAME_CTID" -- stat -c %s "$LOCAL_TAR" 2>/dev/null || true)
+    if [[ -n "$LOCAL_SIZE" && -f "$SHARE_DIR/$LOCAL_NAME" ]]; then
+      HOST_SIZE=$(stat -c %s "$SHARE_DIR/$LOCAL_NAME" 2>/dev/null || true)
+      if [[ -n "$HOST_SIZE" && "$LOCAL_SIZE" == "$HOST_SIZE" ]]; then
+        VERIFIED_BUNDLES+=("$LOCAL_NAME")
+      else
+        MISSING_BUNDLES+=("$LOCAL_NAME")
+      fi
+    else
+      MISSING_BUNDLES+=("$LOCAL_NAME")
+    fi
+  done < <(pct exec "$GAME_CTID" -- bash -c "ls -1 '$BIN_DIR'/crash_bundle*.tar.gz 2>/dev/null || true")
+
+  echo "=== Share Verification Summary ==="
+  if [[ ${#VERIFIED_BUNDLES[@]} -gt 0 ]]; then
+    printf 'Verified on host share (same filename and size):\n'
+    printf '  %s\n' "${VERIFIED_BUNDLES[@]}"
+  else
+    echo "No local crash bundle tarballs were verified on the host share."
+  fi
+
+  if [[ ${#MISSING_BUNDLES[@]} -gt 0 ]]; then
+    printf 'Missing on host share or size mismatch:\n'
+    printf '  %s\n' "${MISSING_BUNDLES[@]}"
+  fi
+  echo
+  echo "This deletes local core files and any local crash bundle tarballs/directories"
+  echo "that were verified on the host share."
+  read -p "Type YES to delete local core files and verified local crash bundles from $BIN_DIR: " CONFIRM
   [[ "$CONFIRM" == "YES" ]] || return
 
   pct exec "$GAME_CTID" -- bash -c "
@@ -6107,11 +6173,34 @@ cleanup_local_crash_artifacts() {
     shopt -s nullglob
     cd '$BIN_DIR'
     rm -f core.*
-    df -h .
   "
+
+  for LOCAL_NAME in "${VERIFIED_BUNDLES[@]}"; do
+    BUNDLE_DIR="${LOCAL_NAME%.tar.gz}"
+    pct exec "$GAME_CTID" -- bash -c "
+      set -euo pipefail
+      mkdir -p '$TEXT_HISTORY_DIR'
+      for txt in '$BIN_DIR/$BUNDLE_DIR'/*.txt; do
+        [[ -e \"\$txt\" ]] || continue
+        cp -f \"\$txt\" '$TEXT_HISTORY_DIR/${BUNDLE_DIR}_'\"\$(basename \"\$txt\")\"
+      done
+      rm -f '$BIN_DIR/$LOCAL_NAME'
+      rm -rf '$BIN_DIR/$BUNDLE_DIR'
+    "
+  done
+
+  pct exec "$GAME_CTID" -- df -h "$BIN_DIR"
   echo
   echo "Local core files removed from $BIN_DIR."
-  echo "Crash bundles and archived bundles on the host share are untouched."
+  if [[ ${#VERIFIED_BUNDLES[@]} -gt 0 ]]; then
+    echo "Verified local crash bundle tarballs/directories were removed after host-share comparison."
+    echo "Their text artifacts were copied into $TEXT_HISTORY_DIR."
+  else
+    echo "No verified local crash bundle tarballs were removed."
+  fi
+  if [[ ${#MISSING_BUNDLES[@]} -gt 0 ]]; then
+    echo "Unverified local crash bundles were left in place."
+  fi
   read -p "Press Enter..." _
 }
 #program starts here
