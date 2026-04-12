@@ -60,7 +60,7 @@ showcase-spp-web-news.jpg
 |---|---|---|
 | Classic | Supported | Shared-services path. Uses shared DB, login, and website topology. |
 | TBC | Supported | Shared-services path. Uses shared DB, login, and website topology. |
-| vMaNGOS | Supported | Separate behavior from shared realms. Uses a dedicated realm DB flow and sits outside the shared website model. |
+| vMaNGOS | Supported | Dedicated realm DB by default. Optional shared-`realmd` mode can converge auth onto the shared website/classic-family authority. |
 | WotLK | WIP Stub | Visible in `Launcher-fork.sh`, but intentionally stubbed so unfinished flows are not runnable yet. |
 
 ## What The Launcher Does
@@ -405,7 +405,7 @@ This area covers:
 
 - supported
 - separate install path
-- dedicated realm DB behavior
+- dedicated realm DB behavior by default, with optional shared-`realmd` convergence mode
 - launcher source selection supports `VMANGOS_REPO_URL` and `VMANGOS_GIT_BRANCH`
 - separate DB endpoint support exists in the launcher
 - dedicated data pack URL support exists in the launcher via `VMANGOS_DATA_PACK_URL`

@@ -180,6 +180,7 @@ normalize_config_env() {
   append_config_default_line "VMANGOS_CONTAINER_BASENAME" '"vmangos"'
   append_config_default_line "VMANGOS_INSTANCE_COUNT" '"1"'
   append_config_default_line "VMANGOS_REALM_OWNER" '""'
+  append_config_default_line "VMANGOS_SHARED_REALMD" '"0"'
   append_config_default_line "SHARED_REALM_OWNER" '""'
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_REPO_URL}\""
@@ -302,6 +303,7 @@ refresh_website_git_tracking() {
 
 update_launcher_self() {
   local mode="${1:-manual}"
+  local upstream_ref=""
   echo
   echo "Updating launcher from git..."
   echo
@@ -312,11 +314,35 @@ update_launcher_self() {
     return 1
   }
 
-  git -C "$SCRIPT_DIR" pull --ff-only || {
-    echo "Launcher update failed."
+  upstream_ref=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+  if [[ -z "$upstream_ref" ]]; then
+    echo "Launcher update failed: no upstream tracking branch is configured."
     [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
     return 1
-  }
+  fi
+
+  if git -C "$SCRIPT_DIR" merge-base --is-ancestor HEAD "$upstream_ref" >/dev/null 2>&1; then
+    git -C "$SCRIPT_DIR" merge --ff-only "$upstream_ref" || {
+      echo "Launcher update failed."
+      [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
+      return 1
+    }
+  else
+    if ! git -C "$SCRIPT_DIR" diff --quiet --ignore-submodules -- || \
+       ! git -C "$SCRIPT_DIR" diff --cached --quiet --ignore-submodules --; then
+      echo "Launcher history was rewritten upstream, but local launcher changes are present."
+      echo "Commit, stash, or discard local changes in ${SCRIPT_DIR} before retrying the update."
+      [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
+      return 1
+    fi
+
+    echo "Launcher history diverged from ${upstream_ref}; aligning to the rewritten upstream history."
+    git -C "$SCRIPT_DIR" reset --hard "$upstream_ref" || {
+      echo "Launcher update failed."
+      [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
+      return 1
+    }
+  fi
 
   chmod +x "$SCRIPT_DIR/Launcher-fork.sh" 2>/dev/null || true
 
@@ -607,6 +633,7 @@ VMANGOS_INSTANCE_COUNT="${VMANGOS_INSTANCE_COUNT:-1}"
 GAME_INSTANCE_NAMES=()
 SHARED_REALM_OWNER="${SHARED_REALM_OWNER:-}"
 VMANGOS_REALM_OWNER="${VMANGOS_REALM_OWNER:-}"
+VMANGOS_SHARED_REALMD="${VMANGOS_SHARED_REALMD:-0}"
 CRASH_SHARE_ROOT="$CRASH_SHARE_ROOT"
 
 # Version Tracking
@@ -646,6 +673,7 @@ MASTER_EXPANSION=""
 MASTER_REALMD_DB=""
 SHARED_REALM_OWNER=""
 VMANGOS_REALM_OWNER=""
+VMANGOS_SHARED_REALMD="0"
 
 # Module build toggles (ON/OFF) — edit via Launcher "Configure Modules" or directly
 MODULE_ACHIEVEMENTS=ON
@@ -1153,6 +1181,17 @@ is_shared_classic_family() {
   esac
 }
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+vmangos_uses_shared_realmd() {
+  is_vmangos "${1:-$EXPANSION}" && is_truthy "${VMANGOS_SHARED_REALMD:-0}"
+}
+
 is_wotlk_wip() {
   [[ "${1:-$EXPANSION}" == "wotlk" ]]
 }
@@ -1166,7 +1205,9 @@ show_wotlk_wip_notice() {
 }
 
 owns_realm_install_lane() {
-  if is_vmangos; then
+  if vmangos_uses_shared_realmd; then
+    is_master
+  elif is_vmangos; then
     vmangos_is_main_target
   else
     is_master
@@ -1174,7 +1215,9 @@ owns_realm_install_lane() {
 }
 
 realm_version_owner() {
-  if is_vmangos; then
+  if vmangos_uses_shared_realmd; then
+    echo "${SHARED_REALM_OWNER:-${MASTER_EXPANSION:-$EXPANSION}}"
+  elif is_vmangos; then
     echo "${VMANGOS_REALM_OWNER:-$EXPANSION}"
   else
     echo "${SHARED_REALM_OWNER:-${MASTER_EXPANSION:-$EXPANSION}}"
@@ -1444,7 +1487,14 @@ derive_db_names() {
   INSTALL_DIR=$(expansion_install_dir "$EXPANSION") || return 1
   EXPANSION_TITLE=$(expansion_title "$EXPANSION")
 
-  if is_vmangos; then
+  if vmangos_uses_shared_realmd; then
+    local shared_expansion
+    shared_expansion=$(resolve_shared_master_expansion) || {
+      echo "Unable to resolve shared realm owner for vMaNGOS shared realmd mode."
+      return 1
+    }
+    REALM_DB_NAME=$(expansion_realm_db_name "$shared_expansion") || return 1
+  elif is_vmangos; then
     local vm_owner="${VMANGOS_REALM_OWNER:-$EXPANSION}"
     REALM_DB_NAME=$(expansion_realm_db_name "$vm_owner") || return 1
   elif [[ -n "${MASTER_REALMD_DB:-}" ]]; then
@@ -1511,7 +1561,13 @@ pin_master_expansion() {
 }
 
 pin_master_realmd_db() {
-  if ! is_shared_classic_family; then
+  if vmangos_uses_shared_realmd; then
+    if [[ -z "${SHARED_REALM_OWNER:-}" ]]; then
+      SHARED_REALM_OWNER=$(resolve_shared_master_expansion) || return 1
+      set_config_value "SHARED_REALM_OWNER" "$SHARED_REALM_OWNER"
+      echo "Pinned shared realm owner: $SHARED_REALM_OWNER"
+    fi
+  elif ! is_shared_classic_family; then
     echo "vMaNGOS uses a dedicated realm DB and does not pin MASTER_REALMD_DB."
     return 0
   fi
@@ -1536,6 +1592,11 @@ pin_vmangos_realm_owner() {
     return 0
   fi
 
+  if vmangos_uses_shared_realmd; then
+    echo "vMaNGOS shared realmd mode enabled; skipping dedicated realm owner pin."
+    return 0
+  fi
+
   local owner="${VMANGOS_REALM_OWNER:-}"
   if [[ -z "$owner" ]]; then
     owner="$EXPANSION"
@@ -1551,7 +1612,17 @@ pin_vmangos_realm_owner() {
 sync_realmd_db_version_markers() {
   derive_db_names || return 1
 
-  if is_vmangos; then
+  local marker_map_key="${MAP_KEY}"
+  if vmangos_uses_shared_realmd; then
+    local shared_expansion
+    shared_expansion=$(resolve_shared_master_expansion) || return 1
+    case "$shared_expansion" in
+      classic) marker_map_key="vanilla" ;;
+      tbc) marker_map_key="tbc" ;;
+      wotlk) marker_map_key="wotlk" ;;
+      *) echo "Unknown shared expansion for marker sync: $shared_expansion"; return 1 ;;
+    esac
+  elif is_vmangos; then
     echo "Skipping realmd_db_version sync for vMaNGOS."
     return 0
   fi
@@ -1562,7 +1633,7 @@ sync_realmd_db_version_markers() {
     return 0
   fi
 
-  local SINGLE_REALMD_SQL="/opt/spp-sql/sql/${MAP_KEY}/updates/realmd/5/single_realmd.sql"
+  local SINGLE_REALMD_SQL="/opt/spp-sql/sql/${marker_map_key}/updates/realmd/5/single_realmd.sql"
   if pct exec "$DB_CTID" -- bash -c "
     set -euo pipefail
     export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -2169,7 +2240,11 @@ expansion_menu() {
       fi
       TITLE="$(expansion_title "$EXP")"
       if [[ "$EXP" == "vmangos" ]]; then
-        TITLE="${TITLE} [Dedicated Realm DB]"
+        if vmangos_uses_shared_realmd "$EXP"; then
+          TITLE="${TITLE} [Shared realmd]"
+        else
+          TITLE="${TITLE} [Dedicated Realm DB]"
+        fi
       elif [[ "$EXP" == "wotlk" ]]; then
         TITLE="${TITLE} [WIP - Stubbed]"
       fi
@@ -4178,7 +4253,7 @@ install_db_no_realm() {
     pin_vmangos_realm_owner || return 1
   fi
   derive_db_names || return 1
-  if is_vmangos; then
+  if is_vmangos && ! vmangos_uses_shared_realmd; then
     echo "vMaNGOS always installs its own dedicated realm DB."
     install_db
     return $?
@@ -5410,7 +5485,7 @@ full_install() {
     ${DROP_ARMORY_SQL}
   "
 
-  # Shared classic-family expansions only drop the master realm DB; vMaNGOS drops its dedicated realm DB.
+  # Shared-auth lanes drop the shared realm DB from the owning install lane; dedicated vMaNGOS keeps its own realm DB.
   if owns_realm_install_lane; then
     pct exec "$DB_CTID" -- bash -c "
       export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -6022,9 +6097,9 @@ cleanup_local_crash_artifacts() {
     echo "Host share directory does not exist yet: $SHARE_DIR"
   fi
   echo
-  echo "This deletes local core files, local crash bundle directories, and local crash bundle tarballs"
-  echo "from the container after you have archived what you need."
-  read -p "Type YES to delete local crash artifacts from $BIN_DIR: " CONFIRM
+  echo "This deletes only local core files from the container."
+  echo "Crash bundle directories and crash bundle tarballs are left untouched."
+  read -p "Type YES to delete local core files from $BIN_DIR: " CONFIRM
   [[ "$CONFIRM" == "YES" ]] || return
 
   pct exec "$GAME_CTID" -- bash -c "
@@ -6032,13 +6107,11 @@ cleanup_local_crash_artifacts() {
     shopt -s nullglob
     cd '$BIN_DIR'
     rm -f core.*
-    rm -f crash_bundle*.tar.gz
-    rm -rf crash_bundle*
     df -h .
   "
   echo
-  echo "Local crash artifacts removed from $BIN_DIR."
-  echo "Archived bundles on host share are untouched."
+  echo "Local core files removed from $BIN_DIR."
+  echo "Crash bundles and archived bundles on the host share are untouched."
   read -p "Press Enter..." _
 }
 #program starts here
