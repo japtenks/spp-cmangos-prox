@@ -3168,7 +3168,7 @@ core_menu() {
       echo "2 - Bridge Pull + Rebuild (Release)"
       echo "3 - Configure Modules (Unavailable for vMaNGOS)"
       echo "4 - Bridge Debug Build"
-      echo "5 - AhBot Preset Build (Release)"
+      echo "5 - AhBot Preset Build (Debug)"
     else
       echo "1 - Clean Rebuild"
       echo "2 - Incremental Update"
@@ -3241,12 +3241,12 @@ core_menu() {
         ;;
       5)
         if is_vmangos; then
-          read -p "Confirm AhBot preset build? (YES): " CONFIRM
+          read -p "Confirm AhBot preset debug build? (YES): " CONFIRM
           if [[ "$CONFIRM" == "YES" ]]; then
             require_existing_game_container || continue
-            vmangos_run_lane_action ahbot-release
+            vmangos_run_lane_action ahbot-debug
             echo
-            read -p "AhBot preset build finished. Press Enter to continue..." _
+            read -p "AhBot preset debug build finished. Press Enter to continue..." _
           fi
         fi
         ;;
@@ -3595,13 +3595,17 @@ vmangos_run_lane_action() {
       build_type="Debug"
       build_dir_name="build-debug"
       ;;
-    ahbot-release)
+    ahbot-release|ahbot-debug)
       vmangos_prompt_source_values \
         "$(vmangos_default_repo "$EXPANSION")" \
         "$DEFAULT_VMANGOS_AHBOT_BRANCH" \
         "AhBot preset lane for $(expansion_title "$EXPANSION"):"
       repo="$VMANGOS_PROMPTED_REPO"
       branch="$VMANGOS_PROMPTED_BRANCH"
+      if [[ "$action" == "ahbot-debug" ]]; then
+        build_type="Debug"
+        build_dir_name="build-debug"
+      fi
       ;;
     *)
       echo "Unknown vMaNGOS lane action: $action"
