@@ -3815,6 +3815,11 @@ vmangos_configure_build_dir() {
   local build_dir_name="$2"
   local reconfigure_mode="${3:-fresh}"
   local extractors_flag="$4"
+  local debug_flag="0"
+
+  if [[ "$build_type" == "Debug" ]]; then
+    debug_flag="1"
+  fi
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -3826,6 +3831,7 @@ vmangos_configure_build_dir() {
       cmake .. \
         -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
         -DCMAKE_BUILD_TYPE=${build_type} \
+        -DDEBUG=${debug_flag} \
         -DBUILD_EXTRACTORS=${extractors_flag} \
         -DBUILD_PLAYERBOTS=ON \
         -DSUPPORTED_CLIENT_BUILD=5875
@@ -3874,7 +3880,7 @@ vmangos_run_lane_action() {
   local action="$1"
   local repo="$DEFAULT_VMANGOS_REPO_URL"
   local branch="$DEFAULT_VMANGOS_BRIDGE_BRANCH"
-  local build_type="Release"
+  local build_type="RelWithDebInfo"
   local build_dir_name="build"
   local reconfigure_mode="fresh"
   local clean_source=0
