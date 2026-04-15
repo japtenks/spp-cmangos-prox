@@ -4,8 +4,10 @@ DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_LAUNCHER_VERSION="22"
 DEFAULT_CRASH_SHARE_ROOT=""
-DEFAULT_VMANGOS_REPO_URL=""
-DEFAULT_VMANGOS_GIT_BRANCH=""
+DEFAULT_VMANGOS_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
+DEFAULT_VMANGOS_GIT_BRANCH="codex/ahbot-next"
+DEFAULT_VMANGOS_BRIDGE_BRANCH="$DEFAULT_VMANGOS_GIT_BRANCH"
+DEFAULT_VMANGOS_AHBOT_BRANCH="$DEFAULT_VMANGOS_GIT_BRANCH"
 DEFAULT_WEBSITE_REPO="https://github.com/japtenks/SPP-Web.git"
 
 # -------------------------
@@ -909,12 +911,10 @@ vmangos_build_lane_label() {
   local target="${1:-$EXPANSION}"
   local branch
   branch=$(expansion_branch "$target" 2>/dev/null || vmangos_default_branch "$target")
-  if [[ "$branch" == "$DEFAULT_VMANGOS_BRIDGE_BRANCH" ]]; then
-    echo "compatibility bridge"
-  elif [[ "$branch" == "$DEFAULT_VMANGOS_AHBOT_BRANCH" ]]; then
-    echo "ahbot preset"
+  if [[ "$branch" == "$DEFAULT_VMANGOS_GIT_BRANCH" ]]; then
+    echo "default preset"
   else
-    echo "custom vMaNGOS lane"
+    echo "custom vMaNGOS pin"
   fi
 }
 
@@ -3461,11 +3461,11 @@ core_menu() {
     echo "Core Maintenance"
     echo
     if is_vmangos; then
-      echo "1 - Bridge Clean Rebuild (Release)"
-      echo "2 - Bridge Pull + Rebuild (Release)"
-      echo "3 - Configure Modules (Unavailable for vMaNGOS)"
-      echo "4 - Bridge Debug Build"
-      echo "5 - AhBot Preset Build (Debug)"
+        echo "1 - Release Clean Rebuild"
+        echo "2 - Release Update + Rebuild"
+        echo "3 - Configure Modules (Unavailable for vMaNGOS)"
+        echo "4 - Default Debug Build"
+        echo "5 - Custom Branch Build (Debug)"
     else
       echo "1 - Clean Rebuild"
       echo "2 - Incremental Update"
@@ -3479,13 +3479,13 @@ core_menu() {
     case "$CORE" in
       1)
         if is_vmangos; then
-          read -p "Confirm bridge clean rebuild? (YES): " CONFIRM
-          if [[ "$CONFIRM" == "YES" ]]; then
-            require_existing_game_container || continue
-            vmangos_run_lane_action bridge-clean
-            echo
-            read -p "Bridge clean rebuild finished. Press Enter to continue..." _
-          fi
+            read -p "Confirm vMaNGOS release clean rebuild? (YES): " CONFIRM
+            if [[ "$CONFIRM" == "YES" ]]; then
+              require_existing_game_container || continue
+              vmangos_run_lane_action release-clean
+              echo
+              read -p "vMaNGOS release clean rebuild finished. Press Enter to continue..." _
+            fi
         else
           read -p "Confirm rebuild? (Y/N): " CONFIRM
           if [[ "${CONFIRM^^}" == "Y" ]]; then
@@ -3499,13 +3499,13 @@ core_menu() {
         ;;
       2)
         if is_vmangos; then
-          read -p "Confirm bridge pull + rebuild? (YES): " CONFIRM
-          if [[ "$CONFIRM" == "YES" ]]; then
-            require_existing_game_container || continue
-            vmangos_run_lane_action bridge-update
-            echo
-            read -p "Bridge pull + rebuild finished. Press Enter to continue..." _
-          fi
+            read -p "Confirm vMaNGOS release update + rebuild? (YES): " CONFIRM
+            if [[ "$CONFIRM" == "YES" ]]; then
+              require_existing_game_container || continue
+              vmangos_run_lane_action release-update
+              echo
+              read -p "vMaNGOS release update + rebuild finished. Press Enter to continue..." _
+            fi
         else
           read -p "Confirm update? (YES): " CONFIRM
           if [[ "$CONFIRM" == "YES" ]]; then
@@ -3530,21 +3530,21 @@ core_menu() {
           read -p "Confirm bridge debug build? (YES): " CONFIRM
           if [[ "$CONFIRM" == "YES" ]]; then
             require_existing_game_container || continue
-            vmangos_run_lane_action bridge-debug
-            echo
-            read -p "Bridge debug build finished. Press Enter to continue..." _
-          fi
+              vmangos_run_lane_action debug
+              echo
+              read -p "Default vMaNGOS debug build finished. Press Enter to continue..." _
+            fi
         fi
         ;;
       5)
         if is_vmangos; then
-          read -p "Confirm AhBot preset debug build? (YES): " CONFIRM
-          if [[ "$CONFIRM" == "YES" ]]; then
-            require_existing_game_container || continue
-            vmangos_run_lane_action ahbot-debug
-            echo
-            read -p "AhBot preset debug build finished. Press Enter to continue..." _
-          fi
+            read -p "Confirm custom vMaNGOS debug build? (YES): " CONFIRM
+            if [[ "$CONFIRM" == "YES" ]]; then
+              require_existing_game_container || continue
+              vmangos_run_lane_action custom-debug
+              echo
+              read -p "Custom vMaNGOS debug build finished. Press Enter to continue..." _
+            fi
         fi
         ;;
       0) return ;;
@@ -3821,9 +3821,8 @@ vmangos_configure_build_dir() {
     BUILD_DIR='/opt/source/${build_dir_name}'
 
     configure_lane() {
-      mkdir -p \"\$BUILD_DIR\"
-      cd \"\$BUILD_DIR\"
-      cmake .. \
+      cd /opt/source
+      cmake -S . -B \"\$BUILD_DIR\" \
         -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
         -DCMAKE_BUILD_TYPE=${build_type} \
         -DBUILD_EXTRACTORS=${extractors_flag} \
@@ -3852,8 +3851,8 @@ vmangos_install_build_dir() {
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
+    cmake --build '/opt/source/${build_dir_name}' -- -j\$(nproc)
     cd '/opt/source/${build_dir_name}'
-    make -j\$(nproc)
     make install
     mkdir -p /var/log/mangos/
     cd '$INSTALL_DIR/etc' || exit 1
@@ -3873,7 +3872,7 @@ vmangos_run_lane_action() {
 
   local action="$1"
   local repo="$DEFAULT_VMANGOS_REPO_URL"
-  local branch="$DEFAULT_VMANGOS_BRIDGE_BRANCH"
+  local branch="$DEFAULT_VMANGOS_GIT_BRANCH"
   local build_type="RelWithDebInfo"
   local build_dir_name="build"
   local reconfigure_mode="fresh"
@@ -3881,27 +3880,25 @@ vmangos_run_lane_action() {
   local extractors_flag
 
   case "$action" in
-    bridge-clean)
+    release-clean|bridge-clean)
       clean_source=1
       ;;
-    bridge-update)
+    release-update|bridge-update)
       reconfigure_mode="fallback"
       ;;
-    bridge-debug)
+    debug|bridge-debug)
       build_type="Debug"
       build_dir_name="build-debug"
       ;;
-    ahbot-release|ahbot-debug)
+    custom-debug|ahbot-release|ahbot-debug)
       vmangos_prompt_source_values \
         "$DEFAULT_VMANGOS_REPO_URL" \
-        "$DEFAULT_VMANGOS_AHBOT_BRANCH" \
-        "AhBot preset lane for $(expansion_title "$EXPANSION"):"
+        "$DEFAULT_VMANGOS_GIT_BRANCH" \
+        "Custom vMaNGOS source pin for $(expansion_title "$EXPANSION"):"
       repo="$VMANGOS_PROMPTED_REPO"
       branch="$VMANGOS_PROMPTED_BRANCH"
-      if [[ "$action" == "ahbot-debug" ]]; then
-        build_type="Debug"
-        build_dir_name="build-debug"
-      fi
+      build_type="Debug"
+      build_dir_name="build-debug"
       ;;
     *)
       echo "Unknown vMaNGOS lane action: $action"
@@ -3914,7 +3911,7 @@ vmangos_run_lane_action() {
     return 1
   }
 
-  if [[ "$action" == "bridge-update" ]]; then
+  if [[ "$action" == "release-update" || "$action" == "bridge-update" ]]; then
     vmangos_pull_source_tree "$repo" "$branch" || return 1
   else
     vmangos_prepare_source_tree "$repo" "$branch" "$clean_source" || return 1
@@ -3935,7 +3932,7 @@ vmangos_run_lane_action() {
 
 test_build_vmangos() {
   is_vmangos || return 1
-  vmangos_run_lane_action bridge-debug
+  vmangos_run_lane_action debug
 }
 
 comp_server() {
@@ -3945,7 +3942,7 @@ comp_server() {
   BRANCH=$(expansion_branch "$EXPANSION") || return 1
 
   if is_vmangos; then
-    vmangos_run_lane_action bridge-clean
+    vmangos_run_lane_action release-clean
     return $?
   fi
 

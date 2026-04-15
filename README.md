@@ -406,7 +406,7 @@ This area covers:
 - supported
 - separate install path
 - dedicated realm DB behavior by default, with optional shared-`realmd` convergence mode
-- launcher source selection supports per-lane pins for bridge and AhBot builds
+- launcher source selection now defaults to a single vMaNGOS branch pin
 - separate DB endpoint support exists in the launcher
 - dedicated data pack URL support exists in the launcher via `VMANGOS_DATA_PACK_URL`
 - database install is substantial and may take a while to complete
@@ -435,21 +435,28 @@ wsl.exe -d Debian --cd /home/japtenks/SPP-Vmangos-bridge-main cmake --build buil
 
 The intended workflow is:
 
-1. Build and validate a vMaNGOS branch in WSL first.
+1. Build and validate the vMaNGOS branch in WSL first.
    Use the lane that matches the goal:
-   - `RelWithDebInfo + BUILD_PLAYERBOTS=ON` for normal bridge validation
+   - `RelWithDebInfo + BUILD_PLAYERBOTS=ON` for normal install validation
    - `Debug + BUILD_PLAYERBOTS=ON` for launcher/crash-analysis repro work
-2. Pin that candidate in `config.env` with the lane that matches the build target:
-   - bridge builds: `VMANGOS_MAIN_REPO_URL` and `VMANGOS_MAIN_GIT_BRANCH`
-   - AhBot builds: `VMANGOS_AHBOT_REPO_URL` and `VMANGOS_AHBOT_GIT_BRANCH`
-3. Run the launcher vMaNGOS test build or full install.
-4. Switch the pin back to your stable bridge or AhBot branch when live validation is complete.
+2. Pin that candidate in the launcher at `Maintenance -> Config Settings -> vMaNGOS Source Pin`.
+   The default vMaNGOS repo/branch is `https://github.com/japtenks/SPP-Vmangos-nix.git` on `codex/ahbot-next`.
+3. The launcher release rebuild now follows the current source/build/install flow:
+   - `cd /opt/source`
+   - `git fetch origin`
+   - `git checkout codex/ahbot-next`
+   - `git reset --hard origin/codex/ahbot-next`
+   - `cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_PLAYERBOTS=ON -DBUILD_EXTRACTORS=OFF`
+   - `cmake --build build -j$(nproc)`
+   - `cd /opt/source/build`
+   - `make install`
+4. Use the custom debug build option only when you need to test a non-default repo or branch.
 
 You can edit the pin from the launcher at:
 
 - `Maintenance -> Config Settings -> vMaNGOS Source Pin`
 
-If those values are unset, the launcher falls back to the default bridge lane (`bridge`) for main builds and the default AhBot lane (`codex/ahbot-next`) for AhBot builds.
+If no custom vMaNGOS source pin is set, the launcher falls back to `codex/ahbot-next`.
 
 ### WotLK
 
