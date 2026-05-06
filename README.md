@@ -58,9 +58,9 @@ showcase-spp-web-news.jpg
 
 | Install path | Status | Notes |
 |---|---|---|
-| Classic | Supported | Shared-services path. Uses shared DB, login, and website topology. Source profile can be switched between standard CMaNGOS, repo lane, and Tortoise planning pin. |
+| Classic | Supported | Shared-services path. Uses shared DB, login, and website topology. Source profile can be switched between standard CMaNGOS and repo lane. |
 | TBC | Supported | Shared-services path. Uses shared DB, login, and website topology. |
-| vMaNGOS | Supported | Dedicated realm DB by default. Optional shared-`realmd` mode can converge auth onto the shared website/classic-family authority. |
+| vMaNGOS | Supported | Shares the common MariaDB container, but hosts its own `realmd` inside the game LXC instead of using `spp-login`. |
 | WotLK | WIP Stub | Visible in `Launcher-fork.sh`, but intentionally stubbed so unfinished flows are not runnable yet. |
 
 ## Build Lanes
@@ -71,7 +71,6 @@ The launcher separates the runtime install path from the source/build lane:
 |---|---|---|
 | CMaNGOS | `standard` | `cmangos/mangos-classic`, branch `master`, with `cmangos/playerbots` pulled into `src/modules/playerbot` |
 | CMaNGOS | `repo` | `japtenks/mangos-classic`, branch `ike3-bots` |
-| CMaNGOS | `tortoise` | `faemwow/tortoise-wow`, branch `main`; planning pin only until the Turtle 1.18.1 DB/data install lane is wired |
 | vMaNGOS | `repo pin` | `japtenks/SPP-Vmangos-nix`, branch `codex/ahbot-next` |
 
 Source pins can be changed from:
@@ -88,7 +87,14 @@ Maintenance -> Config Settings -> CMaNGOS Build Profile
 
 `Launcher.sh` exposes the Classic/CMaNGOS profile override through `CMaNGOS Build Profile`; `Launcher-fork.sh` also exposes the wider `Source URLs and Branches` operator menu for all pinned sources.
 
-The Tortoise profile is intentionally guarded from full install for now. It needs its own Turtle WoW 1.18.1 SQL import, data extraction/import, config deployment, and service mapping before it should be allowed to drop/create databases.
+The top-level menu shows installed lanes only. Use `I - Install New` to select a family:
+
+```text
+1 - CMaNGOS (Classic, TBC)
+2 - vMaNGOS (Classic, Tortoise)
+```
+
+CMaNGOS Classic supports stock-vs-repo/module build profiles. vMaNGOS Classic uses the vMaNGOS bot build path. Tortoise/Turtle is visible under the vMaNGOS family as experimental, but it is not yet allowed to install because its DB/data/config flow is still unproven.
 
 ### Tortoise data extraction planning
 
@@ -101,7 +107,7 @@ Tortoise/Turtle WoW targets client `1.18.1` build `7272`. The future LXC lane sh
 /opt/spp-assets/tortoise/data/mmaps
 ```
 
-The `faemwow/tortoise-wow` fork includes Linux/container-oriented extraction guidance. The launcher should eventually convert that into a Proxmox/LXC workflow that prompts for a mounted Turtle client path, runs the extractors once, validates the four output directories, then imports them during full install.
+The `faemwow/tortoise-wow` fork includes Linux/container-oriented extraction guidance. The launcher should eventually convert that into a dedicated Proxmox/LXC install lane, likely `tortoise`, that prompts for a mounted Turtle client path, runs the extractors once, validates the four output directories, then imports them during full install.
 
 ## What The Launcher Does
 
@@ -132,13 +138,14 @@ Classic and TBC use a shared-services model:
 
 The first installed Classic-family path becomes the shared realm owner. That owner owns the shared `realmd` DB, supplies the `realmd` binary deployed to `spp-login`, and drives the shared website setup.
 
-### vMaNGOS topology
+### vMaNGOS/Turtle-family topology
 
 vMaNGOS is available as a separate install path in the forked launcher:
 
 - it shares the same MariaDB container and website
-- the first installed vMaNGOS game container owns the vMaNGOS `realmd` flow
-- later vMaNGOS instances reuse that realm DB owner instead of creating competing `realmd` stacks
+- each vMaNGOS-family core hosts `realmd` inside its own game LXC
+- the WoW client `realmlist` points at the game LXC for vMaNGOS/Turtle-family lanes
+- Turtle/Tortoise should follow this same game-LXC `realmd` pattern once its DB/data extraction lane is proven
 
 ### WotLK note
 
@@ -151,7 +158,7 @@ The planned WotLK build direction is [`mod-playerbots`](https://github.com/mod-p
 - Proxmox VE host with root shell access
 - internet access from the Proxmox host for Git, package, and template downloads
 - available Proxmox storage for multiple LXC containers
-- enough CPU and RAM for at least one DB container, one login container, one web container, and one game container
+- enough CPU and RAM for at least one DB container, one web container, and one game container; CMaNGOS shared-login lanes also need the `spp-login` container
 
 Recommended sizing from the current launcher flow:
 
@@ -268,7 +275,7 @@ The launcher splits normal operations between per-path controls and shared servi
 | Where | Use it for |
 |---|---|
 | Per-path menu | World server lifecycle, maintenance, logs, RA, and config editing for the selected install path |
-| `Shared Services` | DB, login, website, repo sync, shared config repair, and launcher updates |
+| `Shared Services` | Shared DB, website, CMaNGOS login, repo sync, shared config repair, and launcher updates |
 | `Server Info` | Edit configs, realm address/name changes, crash logs, and GDB analysis |
 
 ### Start, stop, and check status
@@ -445,7 +452,7 @@ This area covers:
 
 - supported
 - separate install path
-- dedicated realm DB behavior by default, with optional shared-`realmd` convergence mode
+- shares the common MariaDB container while hosting `realmd` inside the vMaNGOS game LXC
 - launcher source selection now defaults to a single vMaNGOS branch pin
 - separate DB endpoint support exists in the launcher
 - dedicated data pack URL support exists in the launcher via `VMANGOS_DATA_PACK_URL`

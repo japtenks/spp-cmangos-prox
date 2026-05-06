@@ -713,7 +713,7 @@ EXPANSION=""
 
 cmangos_build_profile() {
   case "${CMANGOS_BUILD_PROFILE:-repo}" in
-    standard|repo|tortoise) printf '%s' "${CMANGOS_BUILD_PROFILE}" ;;
+    standard|repo) printf '%s' "${CMANGOS_BUILD_PROFILE}" ;;
     *) printf '%s' "repo" ;;
   esac
 }
@@ -722,7 +722,6 @@ cmangos_build_profile_label() {
   case "$(cmangos_build_profile)" in
     standard) echo "Standard CMaNGOS + playerbots" ;;
     repo) echo "Japtenks CMaNGOS repo + playerbots" ;;
-    tortoise) echo "Tortoise/Turtle WoW experimental" ;;
   esac
 }
 
@@ -738,7 +737,6 @@ cmangos_profile_repo() {
   case "$(cmangos_build_profile)" in
     standard) echo "${CMANGOS_STANDARD_REPO_URL:-$DEFAULT_CMANGOS_STANDARD_REPO_URL}" ;;
     repo) echo "${CMANGOS_REPO_URL:-$DEFAULT_CMANGOS_REPO_URL}" ;;
-    tortoise) echo "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" ;;
   esac
 }
 
@@ -746,7 +744,6 @@ cmangos_profile_branch() {
   case "$(cmangos_build_profile)" in
     standard) echo "${CMANGOS_STANDARD_GIT_BRANCH:-$DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}" ;;
     repo) echo "${CMANGOS_GIT_BRANCH:-$DEFAULT_CMANGOS_GIT_BRANCH}" ;;
-    tortoise) echo "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" ;;
   esac
 }
 
@@ -1083,6 +1080,14 @@ is_vmangos() {
   [[ "${1:-$EXPANSION}" == vmangos* ]]
 }
 
+realmd_ctid() {
+  if is_vmangos "${1:-$EXPANSION}"; then
+    echo "$GAME_CTID"
+  else
+    echo "$LOGIN_CTID"
+  fi
+}
+
 is_shared_classic_family() {
   case "${1:-$EXPANSION}" in
     classic|tbc|wotlk) return 0 ;;
@@ -1098,7 +1103,8 @@ is_truthy() {
 }
 
 vmangos_uses_shared_realmd() {
-  is_vmangos "${1:-$EXPANSION}" && is_truthy "${VMANGOS_SHARED_REALMD:-0}"
+  # vMaNGOS/Turtle-family cores host realmd inside their game LXC.
+  return 1
 }
 
 owns_realm_install_lane() {
@@ -2013,6 +2019,151 @@ vmangos_instance_menu() {
   done
 }
 
+show_tortoise_wip_notice() {
+  echo
+  echo "Tortoise/Turtle WoW belongs in the vMaNGOS-family install lane."
+  echo "The build should be wired like vMaNGOS, but its SQL/data/config install path is not proven yet."
+  echo "It should share the MariaDB container and host realmd in its own game LXC."
+  echo
+  echo "Planned source default:"
+  echo "  Repo: ${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+  echo "  Branch: ${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
+  echo
+  echo "Next work item: add tortoise as a real LXC target with Turtle 1.18.1 DB import and data extraction."
+  read -p "Press Enter to continue..." _
+}
+
+install_new_cmangos_menu() {
+  while true; do
+    clear
+    print_banner
+    auto_detect_stack
+
+    echo "Install New - CMaNGOS"
+    echo "Classic/TBC lanes. Classic can use stock or repo/module build profiles."
+    echo
+
+    local options=()
+    local exp
+    for exp in classic tbc; do
+      if [[ -z "${GAME_CTIDS[$exp]:-}" ]]; then
+        options+=("$exp")
+      fi
+    done
+
+    if [[ ${#options[@]} -eq 0 ]]; then
+      echo "No uninstalled CMaNGOS lanes are available."
+      echo
+      read -p "Press Enter to return..." _
+      return 1
+    fi
+
+    local i opt title
+    for i in "${!options[@]}"; do
+      opt="${options[$i]}"
+      title="$(expansion_title "$opt")"
+      echo "$((i+1)) - $title"
+      echo "       [Install Path: $opt]"
+      echo "       [Not Installed]"
+      echo
+    done
+
+    echo "0 - Back"
+    echo
+    read -p "Selection: " NEWSEL
+    NEWSEL="${NEWSEL:-}"
+    [[ "$NEWSEL" == "0" ]] && return 1
+
+    [[ "$NEWSEL" =~ ^[0-9]+$ ]] || continue
+    local index=$((NEWSEL-1))
+    if [[ $index -ge 0 && $index -lt ${#options[@]} ]]; then
+      EXPANSION="${options[$index]}"
+      return 0
+    fi
+  done
+}
+
+install_new_vmangos_menu() {
+  while true; do
+    clear
+    print_banner
+    auto_detect_stack
+
+    echo "Install New - vMaNGOS"
+    echo "Classic uses the configured vMaNGOS bot build. Tortoise/Turtle is experimental."
+    echo
+
+    local options=()
+    local target
+    while IFS= read -r target; do
+      [[ -n "$target" ]] || continue
+      if [[ -z "${GAME_CTIDS[$target]:-}" ]]; then
+        options+=("$target")
+      fi
+    done < <(vmangos_target_list)
+    options+=("tortoise")
+
+    local i opt title
+    for i in "${!options[@]}"; do
+      opt="${options[$i]}"
+      if [[ "$opt" == "tortoise" ]]; then
+        title="Tortoise/Turtle WoW [Experimental - installer TBD]"
+      else
+        title="$(expansion_title "$opt")"
+      fi
+      echo "$((i+1)) - $title"
+      echo "       [Install Path: $opt]"
+      if [[ "$opt" == "tortoise" ]]; then
+        echo "       [Not Installed - DB/data flow unproven]"
+      else
+        echo "       [Not Installed]"
+      fi
+      echo
+    done
+
+    echo "0 - Back"
+    echo
+    read -p "Selection: " VMNEWSEL
+    VMNEWSEL="${VMNEWSEL:-}"
+    [[ "$VMNEWSEL" == "0" ]] && return 1
+
+    [[ "$VMNEWSEL" =~ ^[0-9]+$ ]] || continue
+    local index=$((VMNEWSEL-1))
+    if [[ $index -ge 0 && $index -lt ${#options[@]} ]]; then
+      if [[ "${options[$index]}" == "tortoise" ]]; then
+        show_tortoise_wip_notice
+        continue
+      fi
+      EXPANSION="${options[$index]}"
+      return 0
+    fi
+  done
+}
+
+install_new_menu() {
+  while true; do
+    clear
+    print_banner
+    auto_detect_stack
+
+    echo "Install New"
+    echo
+    echo "1 - CMaNGOS (Classic, TBC)"
+    echo "2 - vMaNGOS (Classic, Tortoise)"
+    echo "0 - Back"
+    echo
+
+    read -p "Selection: " FAMILY_SEL
+    FAMILY_SEL="${FAMILY_SEL:-}"
+
+    case "$FAMILY_SEL" in
+      1) install_new_cmangos_menu && return ;;
+      2) install_new_vmangos_menu && return ;;
+      0) return 1 ;;
+    esac
+  done
+}
+
 expansion_menu() {
   while true; do
     clear
@@ -2022,21 +2173,27 @@ expansion_menu() {
     echo "Choose Install Path:"
     echo
 
-    for i in "${!ALLOWED_EXPANSIONS[@]}"; do
-      EXP="${ALLOWED_EXPANSIONS[$i]}"
+    local options=()
+    local exp target
+    for exp in classic tbc; do
+      [[ -n "${GAME_CTIDS[$exp]:-}" ]] && options+=("$exp")
+    done
+    local vm_installed=()
+    while IFS= read -r target; do
+      [[ -n "${GAME_CTIDS[$target]:-}" ]] && vm_installed+=("$target")
+    done < <(vmangos_target_list)
+    if [[ ${#vm_installed[@]} -gt 0 ]]; then
+      options+=("vmangos")
+    fi
+
+    local i
+    for i in "${!options[@]}"; do
+      EXP="${options[$i]}"
       if [[ "$EXP" == "vmangos" ]]; then
-        local vm_installed=()
-        while IFS= read -r target; do
-          [[ -n "${GAME_CTIDS[$target]:-}" ]] && vm_installed+=("$target")
-        done < <(vmangos_target_list)
-        if [[ ${#vm_installed[@]} -gt 0 ]]; then
-          STATUS="[${#vm_installed[@]} instance(s) installed]"
-        else
-          STATUS="[Not Installed]"
-        fi
+        STATUS="[${#vm_installed[@]} instance(s) installed]"
       else
         CTID="${GAME_CTIDS[$EXP]:-}"
-        STATUS=$([[ -n "$CTID" ]] && echo "[Installed - CTID $CTID]" || echo "[Not Installed]")
+        STATUS="[Installed - CTID $CTID]"
       fi
       TITLE="$(expansion_title "$EXP")"
       if [[ "$EXP" == "vmangos" ]]; then
@@ -2053,6 +2210,7 @@ expansion_menu() {
     done
 
     echo "M - Shared Services"
+    echo "I - Install New"
     echo "0 - Exit"
     echo
 
@@ -2065,14 +2223,19 @@ expansion_menu() {
       shared_services_menu
       continue
     fi
+    if [[ "$SEL" =~ ^[Ii]$ ]]; then
+      install_new_menu && return
+      continue
+    fi
 
+    [[ "$SEL" =~ ^[0-9]+$ ]] || continue
     INDEX=$((SEL-1))
-    if [[ $INDEX -ge 0 && $INDEX -lt ${#ALLOWED_EXPANSIONS[@]} ]]; then
-      if [[ "${ALLOWED_EXPANSIONS[$INDEX]}" == "vmangos" ]]; then
+    if [[ $INDEX -ge 0 && $INDEX -lt ${#options[@]} ]]; then
+      if [[ "${options[$INDEX]}" == "vmangos" ]]; then
         vmangos_instance_menu && return
         continue
       fi
-      EXPANSION="${ALLOWED_EXPANSIONS[$INDEX]}"
+      EXPANSION="${options[$INDEX]}"
       return
     fi
   done
@@ -2085,8 +2248,9 @@ shared_services_menu() {
   while true; do
     print_banner
     echo
-    echo "Shared Services (Classic/TBC/WotLK)"
-    echo "Website is the intended admin surface for shared realms after bootstrap."
+    echo "Shared Services"
+    echo "MariaDB and website are shared across all lanes."
+    echo "Classic/TBC/WotLK use the shared login container. vMaNGOS/Turtle host realmd in their game LXC."
     echo
     echo "1 - Status"
     echo "2 - Service Control"
@@ -2363,7 +2527,6 @@ edit_cmangos_source_profile() {
   echo "CMaNGOS build profile"
   echo "1 - standard  Standard CMaNGOS + playerbots"
   echo "2 - repo      Japtenks CMaNGOS repo + playerbots"
-  echo "3 - tortoise  Tortoise/Turtle WoW experimental"
   echo
   echo "Current profile: ${current_profile} ($(cmangos_build_profile_label))"
   read -p "Profile [${current_profile}]: " new_profile
@@ -2371,7 +2534,6 @@ edit_cmangos_source_profile() {
   case "${new_profile:-$current_profile}" in
     1|standard) new_profile="standard"; repo_var="CMANGOS_STANDARD_REPO_URL"; branch_var="CMANGOS_STANDARD_GIT_BRANCH" ;;
     2|repo) new_profile="repo"; repo_var="CMANGOS_REPO_URL"; branch_var="CMANGOS_GIT_BRANCH" ;;
-    3|tortoise) new_profile="tortoise"; repo_var="TORTOISE_REPO_URL"; branch_var="TORTOISE_GIT_BRANCH" ;;
     *)
       echo "Unknown CMaNGOS build profile."
       read -p "Press Enter to continue..." _
@@ -2394,12 +2556,6 @@ edit_cmangos_source_profile() {
   if [[ -n "$new_branch" ]]; then
     printf -v "$branch_var" '%s' "$new_branch"
     set_config_value "$branch_var" "$new_branch"
-  fi
-
-  if [[ "$new_profile" == "tortoise" ]]; then
-    echo
-    echo "Tortoise is currently an experimental source profile."
-    echo "Next work item: add Turtle 1.18.1 DB/data extraction and install flow before using Full Install."
   fi
 
   echo
@@ -2564,12 +2720,24 @@ update_db_conf() {
     DB_PORT="3306"
   fi
 
-  MASTER_EXPANSION=$(resolve_shared_master_expansion) || {
+  if is_vmangos "$TARGET_EXPANSION"; then
+    if pct exec "$GAME_CTID" -- test -f "${INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
+      pct exec "$GAME_CTID" -- bash -c "
+        sed -i \
+        's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+        ${INSTALL_DIR}/etc/realmd.conf
+      "
+      echo "$TARGET_EXPANSION realmd.conf updated in game container."
+    else
+      echo "$TARGET_EXPANSION realmd.conf missing in game container; build/config install must create it first."
+    fi
+  else
+    MASTER_EXPANSION=$(resolve_shared_master_expansion) || {
     echo "No shared Classic/TBC/WotLK master expansion is available yet."
     EXPANSION="$SAVED_EXPANSION"
     GAME_CTID="$SAVED_GAME_CTID"
     return 1
-  }
+    }
 
   MASTER_INSTALL_DIR=$(expansion_install_dir "$MASTER_EXPANSION") || return 1
 
@@ -2598,6 +2766,8 @@ update_db_conf() {
   fi
 
   # mangosd.conf — only update the expansion currently being installed/updated
+  fi
+
   for EXP in "${CONFIG_EXPANSIONS[@]}"; do
     [[ -z "${GAME_CTIDS[$EXP]:-}" ]] && continue
 
@@ -2639,10 +2809,20 @@ update_db_conf() {
 service_create() {
   ensure_expansion_context || return 1
   derive_db_names || return 1
+  local REALMD_CTID=""
+  local WRITE_REALMD=0
 
-  # realmd service only written/reloaded on master expansion
-  if is_master; then
-    pct exec "$LOGIN_CTID" -- bash -c "
+  # CMaNGOS uses the shared login LXC; vMaNGOS-family cores host realmd beside mangosd.
+  if is_vmangos; then
+    REALMD_CTID="$GAME_CTID"
+    WRITE_REALMD=1
+  elif is_master; then
+    REALMD_CTID="$LOGIN_CTID"
+    WRITE_REALMD=1
+  fi
+
+  if (( WRITE_REALMD )); then
+    pct exec "$REALMD_CTID" -- bash -c "
 cat > /etc/systemd/system/realmd.service <<EOF
 [Unit]
 Description=$(if is_vmangos; then echo 'vMaNGOS'; else echo 'CMaNGOS'; fi) Realmd
@@ -2661,8 +2841,8 @@ LimitCORE=infinity
 WantedBy=multi-user.target
 EOF
 "
-    pct exec "$LOGIN_CTID" -- systemctl daemon-reload
-    echo "realmd service written for master: $MASTER_EXPANSION"
+    pct exec "$REALMD_CTID" -- systemctl daemon-reload
+    echo "realmd service written in CT $REALMD_CTID."
   else
     echo "Skipping realmd service — master is ${MASTER_EXPANSION}, not touching login container service."
   fi
@@ -2696,7 +2876,7 @@ fix_realm_entry() {
   ensure_expansion_context || return 1
   derive_db_names || return 1
 
-  LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
+  LOGIN_IP=$(pct exec "$(realmd_ctid)" -- hostname -I | awk '{print $1}')
 
   pct exec "$DB_CTID" -- bash -c "
     export MYSQL_PWD='${DB_ROOT_PASS}'
@@ -3183,14 +3363,16 @@ toggle_autostart() {
 }
 apply_autostart_setting() {
 [[ -z "$LOGIN_CTID" ]] && auto_detect_stack
+  local REALMD_CTID
+  REALMD_CTID=$(realmd_ctid)
   if [[ "$AUTO_START" == "1" ]]; then
-    pct exec "$LOGIN_CTID" -- systemctl enable realmd
+    pct exec "$REALMD_CTID" -- systemctl enable realmd
     pct exec "$GAME_CTID" -- systemctl enable mangosd
-	pct exec "$LOGIN_CTID" -- systemctl start realmd
+	pct exec "$REALMD_CTID" -- systemctl start realmd
     start_mangosd_managed "autostart-enable"
     echo "Autostart ENABLED"
   else
-    pct exec "$LOGIN_CTID" -- systemctl disable realmd
+    pct exec "$REALMD_CTID" -- systemctl disable realmd
     pct exec "$GAME_CTID" -- systemctl disable mangosd
     echo "Autostart DISABLED"
   fi
@@ -5493,7 +5675,9 @@ full_install() {
   echo "Stopping services..."
   stop_mangosd_managed "full-install"
 
-  if is_master; then
+  if is_vmangos; then
+    pct exec "$GAME_CTID" -- systemctl stop realmd 2>/dev/null || true
+  elif is_master; then
     pct exec "$LOGIN_CTID" -- systemctl stop realmd 2>/dev/null || true
     pct exec "$WEB_CTID" -- systemctl stop apache2 2>/dev/null || true
   fi
@@ -5501,7 +5685,7 @@ full_install() {
   echo "Removing old install directory..."
   pct exec "$GAME_CTID" -- rm -rf "$INSTALL_DIR"
 
-  if is_master; then
+  if ! is_vmangos && is_master; then
     pct exec "$LOGIN_CTID" -- rm -rf "$INSTALL_DIR"
     pct exec "$WEB_CTID" -- rm -rf /var/www/html/*
   fi
@@ -5631,7 +5815,12 @@ GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
   echo "=== STACK STATUS ==="
   echo "Bot rotation cron: $(get_bot_rotation_status)"
 
-  for CT in "$LOGIN_CTID" "$GAME_CTID" "$WEB_CTID" "$DB_CTID"; do
+  local STATUS_CTIDS=("$GAME_CTID" "$WEB_CTID" "$DB_CTID")
+  if ! is_vmangos; then
+    STATUS_CTIDS+=("$LOGIN_CTID")
+  fi
+
+  for CT in "${STATUS_CTIDS[@]}"; do
 
     [ -z "$CT" ] && continue
 
@@ -5688,26 +5877,33 @@ stop_world() {
 }
 start_stack() {
 
-for CT in "$DB_CTID" "$WEB_CTID" "$LOGIN_CTID" "$GAME_CTID"; do
-  STATE=$(pct status "$CT" | awk '{print $2}')
-  if [[ "$STATE" != "running" ]]; then
-    pct start "$CT"
-    pct exec "$CT" -- bash -c "while ! systemctl is-system-running --quiet 2>/dev/null; do sleep 1; done"
+  local START_CTIDS=("$DB_CTID" "$WEB_CTID" "$GAME_CTID")
+  if ! is_vmangos; then
+    START_CTIDS+=("$LOGIN_CTID")
   fi
-done
+  local REALMD_CTID
+  REALMD_CTID=$(realmd_ctid)
 
-pct exec "$DB_CTID" -- systemctl start mariadb
-pct exec "$LOGIN_CTID" -- systemctl start realmd
-pct exec "$WEB_CTID" -- systemctl start apache2
-start_mangosd_managed "stack-start"
-sync_bot_rotation_config || true
+  for CT in "${START_CTIDS[@]}"; do
+    STATE=$(pct status "$CT" | awk '{print $2}')
+    if [[ "$STATE" != "running" ]]; then
+      pct start "$CT"
+      pct exec "$CT" -- bash -c "while ! systemctl is-system-running --quiet 2>/dev/null; do sleep 1; done"
+    fi
+  done
+
+  pct exec "$DB_CTID" -- systemctl start mariadb
+  pct exec "$REALMD_CTID" -- systemctl start realmd
+  pct exec "$WEB_CTID" -- systemctl start apache2
+  start_mangosd_managed "stack-start"
+  sync_bot_rotation_config || true
 
 }
 
 server_info_menu() {
   ensure_expansion_context || return 1
   auto_detect_stack
-  LOGIN_IP=$(pct exec "$LOGIN_CTID" -- hostname -I | awk '{print $1}')
+  LOGIN_IP=$(pct exec "$(realmd_ctid)" -- hostname -I | awk '{print $1}')
 
   while true; do
     #clear
@@ -5774,7 +5970,7 @@ edit_bot_settings() {
 }
 edit_realmd_settings() {
   derive_db_names || return 1
-  pct exec "$LOGIN_CTID" -- nano "$INSTALL_DIR/etc/realmd.conf"
+  pct exec "$(realmd_ctid)" -- nano "$INSTALL_DIR/etc/realmd.conf"
 }
 edit_other_settings() {
   derive_db_names || return 1
@@ -5794,15 +5990,17 @@ edit_other_settings() {
     PATHS+=("$conf")
   done < <(pct exec "$GAME_CTID" -- bash -lc "find '$GAME_ETC' -maxdepth 1 -type f -name '*.conf' | sort" 2>/dev/null)
 
-  while IFS= read -r conf; do
-    [[ -z "$conf" ]] && continue
-    case "$(basename "$conf")" in
-      realmd.conf) continue ;;
-    esac
-    LABELS+=("Login: $(basename "$conf")")
-    TARGETS+=("$LOGIN_CTID")
-    PATHS+=("$conf")
-  done < <(pct exec "$LOGIN_CTID" -- bash -lc "find '$LOGIN_ETC' -maxdepth 1 -type f -name '*.conf' | sort" 2>/dev/null)
+  if ! is_vmangos; then
+    while IFS= read -r conf; do
+      [[ -z "$conf" ]] && continue
+      case "$(basename "$conf")" in
+        realmd.conf) continue ;;
+      esac
+      LABELS+=("Login: $(basename "$conf")")
+      TARGETS+=("$LOGIN_CTID")
+      PATHS+=("$conf")
+    done < <(pct exec "$LOGIN_CTID" -- bash -lc "find '$LOGIN_ETC' -maxdepth 1 -type f -name '*.conf' | sort" 2>/dev/null)
+  fi
 
   if (( ${#LABELS[@]} == 0 )); then
     echo "No additional config files found."
