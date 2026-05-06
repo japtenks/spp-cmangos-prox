@@ -58,10 +58,50 @@ showcase-spp-web-news.jpg
 
 | Install path | Status | Notes |
 |---|---|---|
-| Classic | Supported | Shared-services path. Uses shared DB, login, and website topology. |
+| Classic | Supported | Shared-services path. Uses shared DB, login, and website topology. Source profile can be switched between standard CMaNGOS, repo lane, and Tortoise planning pin. |
 | TBC | Supported | Shared-services path. Uses shared DB, login, and website topology. |
 | vMaNGOS | Supported | Dedicated realm DB by default. Optional shared-`realmd` mode can converge auth onto the shared website/classic-family authority. |
 | WotLK | WIP Stub | Visible in `Launcher-fork.sh`, but intentionally stubbed so unfinished flows are not runnable yet. |
+
+## Build Lanes
+
+The launcher separates the runtime install path from the source/build lane:
+
+| Engine lane | Build profile | Default source |
+|---|---|---|
+| CMaNGOS | `standard` | `cmangos/mangos-classic`, branch `master`, with `cmangos/playerbots` pulled into `src/modules/playerbot` |
+| CMaNGOS | `repo` | `japtenks/mangos-classic`, branch `ike3-bots` |
+| CMaNGOS | `tortoise` | `faemwow/tortoise-wow`, branch `main`; planning pin only until the Turtle 1.18.1 DB/data install lane is wired |
+| vMaNGOS | `repo pin` | `japtenks/SPP-Vmangos-nix`, branch `codex/ahbot-next` |
+
+Source pins can be changed from:
+
+```text
+Maintenance -> Config Settings -> Source URLs and Branches
+```
+
+For Classic/CMaNGOS, the active profile can also be changed from:
+
+```text
+Maintenance -> Config Settings -> CMaNGOS Build Profile
+```
+
+`Launcher.sh` exposes the Classic/CMaNGOS profile override through `CMaNGOS Build Profile`; `Launcher-fork.sh` also exposes the wider `Source URLs and Branches` operator menu for all pinned sources.
+
+The Tortoise profile is intentionally guarded from full install for now. It needs its own Turtle WoW 1.18.1 SQL import, data extraction/import, config deployment, and service mapping before it should be allowed to drop/create databases.
+
+### Tortoise data extraction planning
+
+Tortoise/Turtle WoW targets client `1.18.1` build `7272`. The future LXC lane should stage extracted assets under a dedicated path instead of reusing vanilla CMaNGOS data blindly:
+
+```text
+/opt/spp-assets/tortoise/data/dbc
+/opt/spp-assets/tortoise/data/maps
+/opt/spp-assets/tortoise/data/vmaps
+/opt/spp-assets/tortoise/data/mmaps
+```
+
+The `faemwow/tortoise-wow` fork includes Linux/container-oriented extraction guidance. The launcher should eventually convert that into a Proxmox/LXC workflow that prompts for a mounted Turtle client path, runs the extractors once, validates the four output directories, then imports them during full install.
 
 ## What The Launcher Does
 

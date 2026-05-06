@@ -4,6 +4,12 @@ DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_LAUNCHER_VERSION="22"
 DEFAULT_CRASH_SHARE_ROOT="/mnt/fast/crashlogs"
+DEFAULT_CMANGOS_STANDARD_REPO_URL="https://github.com/cmangos/mangos-classic.git"
+DEFAULT_CMANGOS_STANDARD_GIT_BRANCH="master"
+DEFAULT_CMANGOS_REPO_URL="https://github.com/japtenks/mangos-classic.git"
+DEFAULT_CMANGOS_GIT_BRANCH="ike3-bots"
+DEFAULT_TORTOISE_REPO_URL="https://github.com/faemwow/tortoise-wow.git"
+DEFAULT_TORTOISE_GIT_BRANCH="main"
 DEFAULT_VMANGOS_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
 DEFAULT_VMANGOS_GIT_BRANCH="codex/ahbot-next"
 DEFAULT_VMANGOS_BRIDGE_REPO_URL="$DEFAULT_VMANGOS_REPO_URL"
@@ -172,6 +178,13 @@ normalize_config_env() {
   append_config_default_line "WEBSITE_REMOTE_GIT_DATE" '"unknown"'
   append_config_default_line "WEBSITE_GIT_OUTDATED" '"0"'
 
+  append_config_default_line "CMANGOS_BUILD_PROFILE" '"repo"'
+  append_config_default_line "CMANGOS_STANDARD_REPO_URL" "\"${DEFAULT_CMANGOS_STANDARD_REPO_URL}\""
+  append_config_default_line "CMANGOS_STANDARD_GIT_BRANCH" "\"${DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}\""
+  append_config_default_line "CMANGOS_REPO_URL" "\"${DEFAULT_CMANGOS_REPO_URL}\""
+  append_config_default_line "CMANGOS_GIT_BRANCH" "\"${DEFAULT_CMANGOS_GIT_BRANCH}\""
+  append_config_default_line "TORTOISE_REPO_URL" "\"${DEFAULT_TORTOISE_REPO_URL}\""
+  append_config_default_line "TORTOISE_GIT_BRANCH" "\"${DEFAULT_TORTOISE_GIT_BRANCH}\""
   append_config_default_line "VMANGOS_INSTANCE_NAMES" '("main" "ahbot")'
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
@@ -597,6 +610,13 @@ IP_WOTLK="$IP_WOTLK"
 IP_VMANGOS="$IP_VMANGOS"
 VMANGOS_WORLD_DB_URL="${VMANGOS_WORLD_DB_URL:-https://github.com/brotalnia/database/raw/master/world_full_14_june_2021.7z}"
 VMANGOS_DATA_PACK_URL="${VMANGOS_DATA_PACK_URL:-https://github.com/japtenks/spp-cmangos-prox/releases/download/assets/vmangos-bropack-v25.zip}"
+CMANGOS_BUILD_PROFILE="${CMANGOS_BUILD_PROFILE:-repo}"
+CMANGOS_STANDARD_REPO_URL="${CMANGOS_STANDARD_REPO_URL:-$DEFAULT_CMANGOS_STANDARD_REPO_URL}"
+CMANGOS_STANDARD_GIT_BRANCH="${CMANGOS_STANDARD_GIT_BRANCH:-$DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}"
+CMANGOS_REPO_URL="${CMANGOS_REPO_URL:-$DEFAULT_CMANGOS_REPO_URL}"
+CMANGOS_GIT_BRANCH="${CMANGOS_GIT_BRANCH:-$DEFAULT_CMANGOS_GIT_BRANCH}"
+TORTOISE_REPO_URL="${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+TORTOISE_GIT_BRANCH="${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
 CRASH_SHARE_ROOT="$CRASH_SHARE_ROOT"
 
 # Version Tracking
@@ -667,6 +687,13 @@ LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
 CONFIG_ENV_ENCRYPTION="${CONFIG_ENV_ENCRYPTION:-0}"
 LAUNCHER_AUTO_UPDATE_ON_START="${LAUNCHER_AUTO_UPDATE_ON_START:-0}"
 CRASH_SHARE_ROOT="${CRASH_SHARE_ROOT:-$DEFAULT_CRASH_SHARE_ROOT}"
+CMANGOS_BUILD_PROFILE="${CMANGOS_BUILD_PROFILE:-repo}"
+CMANGOS_STANDARD_REPO_URL="${CMANGOS_STANDARD_REPO_URL:-$DEFAULT_CMANGOS_STANDARD_REPO_URL}"
+CMANGOS_STANDARD_GIT_BRANCH="${CMANGOS_STANDARD_GIT_BRANCH:-$DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}"
+CMANGOS_REPO_URL="${CMANGOS_REPO_URL:-$DEFAULT_CMANGOS_REPO_URL}"
+CMANGOS_GIT_BRANCH="${CMANGOS_GIT_BRANCH:-$DEFAULT_CMANGOS_GIT_BRANCH}"
+TORTOISE_REPO_URL="${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+TORTOISE_GIT_BRANCH="${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
 LAUNCHER_GIT_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
 LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
 WEBSITE_GIT_BRANCH="${WEBSITE_GIT_BRANCH:-unknown}"
@@ -683,6 +710,45 @@ WEB_CTID="${WEB_CTID:-}"
 LOGIN_CTID="${LOGIN_CTID:-}"
 GAME_CTID="${GAME_CTID:-}"
 EXPANSION=""
+
+cmangos_build_profile() {
+  case "${CMANGOS_BUILD_PROFILE:-repo}" in
+    standard|repo|tortoise) printf '%s' "${CMANGOS_BUILD_PROFILE}" ;;
+    *) printf '%s' "repo" ;;
+  esac
+}
+
+cmangos_build_profile_label() {
+  case "$(cmangos_build_profile)" in
+    standard) echo "Standard CMaNGOS + playerbots" ;;
+    repo) echo "Japtenks CMaNGOS repo + playerbots" ;;
+    tortoise) echo "Tortoise/Turtle WoW experimental" ;;
+  esac
+}
+
+has_cmangos_source_profile() {
+  [[ "${1:-$EXPANSION}" == "classic" ]]
+}
+
+is_tortoise_profile() {
+  [[ "$(cmangos_build_profile)" == "tortoise" ]]
+}
+
+cmangos_profile_repo() {
+  case "$(cmangos_build_profile)" in
+    standard) echo "${CMANGOS_STANDARD_REPO_URL:-$DEFAULT_CMANGOS_STANDARD_REPO_URL}" ;;
+    repo) echo "${CMANGOS_REPO_URL:-$DEFAULT_CMANGOS_REPO_URL}" ;;
+    tortoise) echo "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" ;;
+  esac
+}
+
+cmangos_profile_branch() {
+  case "$(cmangos_build_profile)" in
+    standard) echo "${CMANGOS_STANDARD_GIT_BRANCH:-$DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}" ;;
+    repo) echo "${CMANGOS_GIT_BRANCH:-$DEFAULT_CMANGOS_GIT_BRANCH}" ;;
+    tortoise) echo "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" ;;
+  esac
+}
 
 vmangos_instance_name_list() {
   if declare -p VMANGOS_INSTANCE_NAMES >/dev/null 2>&1; then
@@ -855,7 +921,7 @@ expansion_repo() {
   local repo_var
   local default_repo
   case "$1" in
-    classic) echo "https://github.com/japtenks/mangos-classic.git" ;;
+    classic) cmangos_profile_repo ;;
     tbc) echo "https://github.com/celguar/mangos-tbc.git" ;;
     wotlk) echo "https://github.com/celguar/mangos-wotlk.git" ;;
     vmangos|vmangos-*)
@@ -871,7 +937,8 @@ expansion_branch() {
   local branch_var
   local default_branch
   case "$1" in
-    classic|tbc|wotlk) echo "ike3-bots" ;;
+    classic) cmangos_profile_branch ;;
+    tbc|wotlk) echo "ike3-bots" ;;
     vmangos|vmangos-*)
       default_branch=$(vmangos_default_branch "$1")
       branch_var=$(vmangos_branch_var_name "$1")
@@ -1796,6 +1863,10 @@ print_version() {
   if is_vmangos; then
     echo    "Pinned Repo: $(expansion_repo "$EXPANSION")"
     echo    "Pinned Branch: $(expansion_branch "$EXPANSION")"
+  elif has_cmangos_source_profile; then
+    echo    "Build Profile: $(cmangos_build_profile_label)"
+    echo    "Pinned Repo: $(expansion_repo "$EXPANSION")"
+    echo    "Pinned Branch: $(expansion_branch "$EXPANSION")"
   fi
   echo -e "Core: ${CORE_COLOR}v${CORE_VER:-NA}${RESET} (${CORE_BRANCH:-?}@${CORE_COMMIT:-?})"
   echo -e "Bots: ${YELLOW}${BOT_BRANCH:-?}@${BOT_COMMIT:-?}${RESET}"
@@ -2280,6 +2351,61 @@ edit_crash_share_root() {
     return 1
   }
   echo "Crash share root saved as: ${CRASH_SHARE_ROOT}"
+  read -p "Press Enter to continue..." _
+}
+
+edit_cmangos_source_profile() {
+  local current_profile new_profile
+  local repo_var branch_var current_repo current_branch new_repo new_branch
+  current_profile="$(cmangos_build_profile)"
+
+  echo
+  echo "CMaNGOS build profile"
+  echo "1 - standard  Standard CMaNGOS + playerbots"
+  echo "2 - repo      Japtenks CMaNGOS repo + playerbots"
+  echo "3 - tortoise  Tortoise/Turtle WoW experimental"
+  echo
+  echo "Current profile: ${current_profile} ($(cmangos_build_profile_label))"
+  read -p "Profile [${current_profile}]: " new_profile
+
+  case "${new_profile:-$current_profile}" in
+    1|standard) new_profile="standard"; repo_var="CMANGOS_STANDARD_REPO_URL"; branch_var="CMANGOS_STANDARD_GIT_BRANCH" ;;
+    2|repo) new_profile="repo"; repo_var="CMANGOS_REPO_URL"; branch_var="CMANGOS_GIT_BRANCH" ;;
+    3|tortoise) new_profile="tortoise"; repo_var="TORTOISE_REPO_URL"; branch_var="TORTOISE_GIT_BRANCH" ;;
+    *)
+      echo "Unknown CMaNGOS build profile."
+      read -p "Press Enter to continue..." _
+      return 1
+      ;;
+  esac
+
+  set_config_value "CMANGOS_BUILD_PROFILE" "$new_profile"
+  CMANGOS_BUILD_PROFILE="$new_profile"
+  current_repo="${!repo_var:-}"
+  current_branch="${!branch_var:-}"
+  echo
+  echo "Leave repo/branch blank to keep the current pin."
+  read -p "Repo [${current_repo}]: " new_repo
+  read -p "Branch [${current_branch}]: " new_branch
+  if [[ -n "$new_repo" ]]; then
+    printf -v "$repo_var" '%s' "$new_repo"
+    set_config_value "$repo_var" "$new_repo"
+  fi
+  if [[ -n "$new_branch" ]]; then
+    printf -v "$branch_var" '%s' "$new_branch"
+    set_config_value "$branch_var" "$new_branch"
+  fi
+
+  if [[ "$new_profile" == "tortoise" ]]; then
+    echo
+    echo "Tortoise is currently an experimental source profile."
+    echo "Next work item: add Turtle 1.18.1 DB/data extraction and install flow before using Full Install."
+  fi
+
+  echo
+  echo "Saved CMaNGOS profile: $(cmangos_build_profile) ($(cmangos_build_profile_label))"
+  echo "Repo: $(expansion_repo classic)"
+  echo "Branch: $(expansion_branch classic)"
   read -p "Press Enter to continue..." _
 }
 
@@ -2976,6 +3102,10 @@ service_menu() {
       echo "Build Lane: $(vmangos_build_lane_label "$EXPANSION")"
       echo "Pinned vMaNGOS Repo: $(expansion_repo "$EXPANSION")"
       echo "Pinned vMaNGOS Branch: $(expansion_branch "$EXPANSION")"
+    elif has_cmangos_source_profile; then
+      echo "Build Lane: $(cmangos_build_profile_label)"
+      echo "Pinned CMaNGOS Repo: $(expansion_repo "$EXPANSION")"
+      echo "Pinned CMaNGOS Branch: $(expansion_branch "$EXPANSION")"
     fi
     echo "1 - Stack Control"
     echo "2 - Maintenance"
@@ -3113,6 +3243,12 @@ config_menu() {
     echo
     echo "1 - Update Bot Conf from Repo"
     echo "2 - Crash Share Root: (${CRASH_SHARE_ROOT})"
+    if has_cmangos_source_profile; then
+      echo "3 - CMaNGOS Build Profile"
+      echo "    Profile: $(cmangos_build_profile) ($(cmangos_build_profile_label))"
+      echo "    Repo: $(expansion_repo "$EXPANSION")"
+      echo "    Branch: $(expansion_branch "$EXPANSION")"
+    fi
     if is_vmangos; then
       echo "3 - vMaNGOS Instance Names"
       echo "    $(vmangos_instance_summary)"
@@ -3136,6 +3272,8 @@ config_menu() {
       3)
         if is_vmangos; then
           edit_vmangos_instance_names
+        elif has_cmangos_source_profile; then
+          edit_cmangos_source_profile
         fi
         ;;
       4)
@@ -3641,6 +3779,12 @@ comp_server() {
     return $?
   fi
 
+  if [[ "$EXPANSION" == "classic" ]] && is_tortoise_profile; then
+    echo "Tortoise/Turtle WoW source is pinned, but the native LXC build/install lane is not wired yet."
+    echo "Use this profile for planning/source pins only until the Turtle CMake, SQL, and data extraction flow is added."
+    return 1
+  fi
+
   pct exec "$GAME_CTID" -- bash -c "
     set -e
     cd /opt
@@ -3684,15 +3828,23 @@ comp_server() {
   "
 
   local MODULE_FLAGS
-  MODULE_FLAGS=$(build_module_flags)
+  local BUILD_MODULES_FLAG="-DBUILD_MODULES=ON"
+  if [[ "$EXPANSION" == "classic" && "$(cmangos_build_profile)" == "standard" ]]; then
+    MODULE_FLAGS=""
+    BUILD_MODULES_FLAG="-DBUILD_MODULES=OFF"
+  else
+    MODULE_FLAGS=$(build_module_flags)
+  fi
   local EXPECTED_MODULES=""
-  for mod in "${SPP_MODULES[@]}"; do
-    local var="MODULE_${mod}"
-    local val="${!var:-ON}"
-    if [[ "$val" == "ON" ]]; then
-      EXPECTED_MODULES+=" $(echo "$mod" | tr '[:upper:]' '[:lower:]')"
-    fi
-  done
+  if [[ "$BUILD_MODULES_FLAG" == "-DBUILD_MODULES=ON" ]]; then
+    for mod in "${SPP_MODULES[@]}"; do
+      local var="MODULE_${mod}"
+      local val="${!var:-ON}"
+      if [[ "$val" == "ON" ]]; then
+        EXPECTED_MODULES+=" $(echo "$mod" | tr '[:upper:]' '[:lower:]')"
+      fi
+    done
+  fi
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
@@ -3707,7 +3859,7 @@ comp_server() {
       -DDEBUG=0 \
       -DBUILD_PLAYERBOTS=ON \
       -DBUILD_AHBOT=ON \
-      -DBUILD_MODULES=ON \
+      $BUILD_MODULES_FLAG \
       -DBUILD_GIT_ID=ON \
       $MODULE_FLAGS
     cmake .. \
@@ -3718,11 +3870,11 @@ comp_server() {
       -DDEBUG=0 \
       -DBUILD_PLAYERBOTS=ON \
       -DBUILD_AHBOT=ON \
-      -DBUILD_MODULES=ON \
+      $BUILD_MODULES_FLAG \
       -DBUILD_GIT_ID=ON \
       $MODULE_FLAGS
     GENERATED_MODULES_FILE='/opt/source/src/modules/modules/src/Modules.cpp'
-    if [[ ! -f \"\$GENERATED_MODULES_FILE\" ]]; then
+    if [[ -n \"$EXPECTED_MODULES\" && ! -f \"\$GENERATED_MODULES_FILE\" ]]; then
       echo 'ERROR: Generated Modules.cpp not found after configure.'
       exit 1
     fi
@@ -3802,25 +3954,42 @@ update_core() {
     return 0
   fi
 
+  if [[ "$EXPANSION" == "classic" ]] && is_tortoise_profile; then
+    echo "Tortoise/Turtle WoW source is pinned, but incremental core rebuild is not wired yet."
+    return 1
+  fi
+
+  local REPO BRANCH
+  REPO=$(expansion_repo "$EXPANSION") || return 1
+  BRANCH=$(expansion_branch "$EXPANSION") || return 1
   local OLD_CORE OLD_BOT
   OLD_CORE=$(pct exec "$GAME_CTID" -- git -C /opt/source rev-parse HEAD)
   OLD_BOT=$(pct exec "$GAME_CTID" -- git -C /opt/source/src/modules/playerbot rev-parse HEAD)
   local MODULE_FLAGS
-  MODULE_FLAGS=$(build_module_flags)
+  local BUILD_MODULES_FLAG="-DBUILD_MODULES=ON"
+  if [[ "$EXPANSION" == "classic" && "$(cmangos_build_profile)" == "standard" ]]; then
+    MODULE_FLAGS=""
+    BUILD_MODULES_FLAG="-DBUILD_MODULES=OFF"
+  else
+    MODULE_FLAGS=$(build_module_flags)
+  fi
   local EXPECTED_MODULES=""
-  for mod in "${SPP_MODULES[@]}"; do
-    local var="MODULE_${mod}"
-    local val="${!var:-ON}"
-    if [[ "$val" == "ON" ]]; then
-      EXPECTED_MODULES+=" $(echo "$mod" | tr '[:upper:]' '[:lower:]')"
-    fi
-  done
+  if [[ "$BUILD_MODULES_FLAG" == "-DBUILD_MODULES=ON" ]]; then
+    for mod in "${SPP_MODULES[@]}"; do
+      local var="MODULE_${mod}"
+      local val="${!var:-ON}"
+      if [[ "$val" == "ON" ]]; then
+        EXPECTED_MODULES+=" $(echo "$mod" | tr '[:upper:]' '[:lower:]')"
+      fi
+    done
+  fi
 
   pct exec "$GAME_CTID" -- bash -c "
     set -e
     cd /opt/source
+    git remote set-url origin '$REPO'
     git fetch
-    git checkout ike3-bots
+    git checkout '$BRANCH'
     git pull
     sed -i 's|davidonete/cmangos-modules|japtenks/cmangos-modules|g' /opt/source/CMakeLists.txt
     cd src/modules/playerbot
@@ -3872,7 +4041,7 @@ update_core() {
         -DDEBUG=0 \
         -DBUILD_PLAYERBOTS=ON \
         -DBUILD_AHBOT=ON \
-        -DBUILD_MODULES=ON \
+        $BUILD_MODULES_FLAG \
         -DBUILD_GIT_ID=ON \
         $MODULE_FLAGS
       make -j\$(nproc)
@@ -5312,6 +5481,14 @@ install_data() {
 
 full_install() {
   derive_db_names || return 1
+
+  if [[ "$EXPANSION" == "classic" ]] && is_tortoise_profile; then
+    echo "Tortoise/Turtle WoW is configured as the CMaNGOS source profile, but its DB/data installer is not wired yet."
+    echo "Required next steps: add Turtle 1.18.1 SQL import, data extraction/import, config deployment, and service mapping."
+    echo "Full install is blocked to avoid dropping the existing Classic-family databases into an incompatible layout."
+    read -p "Press Enter to continue..." _
+    return 1
+  fi
 
   echo "Stopping services..."
   stop_mangosd_managed "full-install"
