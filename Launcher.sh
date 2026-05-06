@@ -1111,7 +1111,7 @@ owns_realm_install_lane() {
   if vmangos_uses_shared_realmd; then
     is_master
   else
-    is_vmangos || is_master
+    is_vmangos || [[ -z "${MASTER_EXPANSION:-}" ]] || is_master
   fi
 }
 
@@ -1886,8 +1886,20 @@ print_version() {
 ensure_shared_stack() {
 
   auto_detect_stack
+  local REQUIRE_LOGIN="${1:-auto}"
+  if [[ "$REQUIRE_LOGIN" == "auto" ]]; then
+    if is_vmangos; then
+      REQUIRE_LOGIN="0"
+    else
+      REQUIRE_LOGIN="1"
+    fi
+  fi
 
-  [[ -n "$DB_CTID" && -n "$WEB_CTID" && -n "$LOGIN_CTID" ]] && return
+  if [[ -n "$DB_CTID" && -n "$WEB_CTID" ]]; then
+    if [[ "$REQUIRE_LOGIN" != "1" || -n "$LOGIN_CTID" ]]; then
+      return
+    fi
+  fi
 
   echo
   echo "Shared SPP services incomplete."
@@ -1904,12 +1916,49 @@ ensure_shared_stack() {
     create_container "spp-web" "website" "$WEB_NEW" 2
   fi
 
-  if [[ -z "$LOGIN_CTID" ]]; then
+  if [[ "$REQUIRE_LOGIN" == "1" && -z "$LOGIN_CTID" ]]; then
     read -p "Enter CTID for spp-login: " LOGIN_NEW
     create_container "spp-login" "login" "$LOGIN_NEW" 3
   fi
 
   auto_detect_stack
+  if [[ -z "$DB_CTID" || -z "$WEB_CTID" ]]; then
+    echo "Shared DB/web services are still incomplete."
+    return 1
+  fi
+  if [[ "$REQUIRE_LOGIN" == "1" && -z "$LOGIN_CTID" ]]; then
+    echo "Shared login service is still incomplete."
+    return 1
+  fi
+}
+create_game_container_interactive() {
+  auto_detect_stack
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+
+  if [[ -n "$GAME_CTID" ]]; then
+    echo "Game container $(vmangos_target_display "$EXPANSION") already exists: CTID $GAME_CTID"
+    return 0
+  fi
+
+  echo
+  echo "Create game container for $(expansion_title "$EXPANSION")"
+  pct list
+  echo
+
+  read -p "Enter new CTID for $(vmangos_target_display "$EXPANSION"): " NEW_CTID
+  [[ "$NEW_CTID" =~ ^[0-9]+$ ]] || {
+    echo "Invalid CTID."
+    return 1
+  }
+
+  create_container "$(vmangos_target_hostname "$EXPANSION")" "game" "$NEW_CTID" 4
+
+  auto_detect_stack
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+  if [[ -z "$GAME_CTID" ]]; then
+    echo "Created container was not detected for ${EXPANSION}."
+    return 1
+  fi
 }
 ensure_game_container() {
 
@@ -2033,6 +2082,24 @@ show_tortoise_wip_notice() {
   read -p "Press Enter to continue..." _
 }
 
+run_guided_new_install() {
+  echo
+  echo "Preparing new install: $(expansion_title "$EXPANSION")"
+
+  if is_vmangos; then
+    ensure_shared_stack "0" || return 1
+  else
+    ensure_shared_stack "1" || return 1
+  fi
+
+  create_game_container_interactive || return 1
+  derive_db_names || return 1
+
+  echo
+  echo "Starting full install for $(expansion_title "$EXPANSION") [${EXPANSION}] on CTID ${GAME_CTID}."
+  full_install
+}
+
 install_new_cmangos_menu() {
   while true; do
     clear
@@ -2078,7 +2145,8 @@ install_new_cmangos_menu() {
     local index=$((NEWSEL-1))
     if [[ $index -ge 0 && $index -lt ${#options[@]} ]]; then
       EXPANSION="${options[$index]}"
-      return 0
+      run_guided_new_install
+      return $?
     fi
   done
 }
@@ -2135,7 +2203,8 @@ install_new_vmangos_menu() {
         continue
       fi
       EXPANSION="${options[$index]}"
-      return 0
+      run_guided_new_install
+      return $?
     fi
   done
 }

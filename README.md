@@ -94,6 +94,8 @@ The top-level menu shows installed lanes only. Use `I - Install New` to select a
 2 - vMaNGOS (Classic, Tortoise)
 ```
 
+The install wizard then lists valid uninstalled lanes, shows `pct list`, prompts for a new game-container CTID, creates the LXC, and rolls directly into `Full (re)Install`.
+
 CMaNGOS Classic supports stock-vs-repo/module build profiles. vMaNGOS Classic uses the vMaNGOS bot build path. Tortoise/Turtle is visible under the vMaNGOS family as experimental, but it is not yet allowed to install because its DB/data/config flow is still unproven.
 
 ### Tortoise data extraction planning
@@ -186,10 +188,9 @@ bash Launcher.sh
 Then:
 
 1. Complete first-run bootstrap prompts.
-2. Choose an install path from the launcher menu.
-3. Create or attach the required game container when prompted.
-4. Open `Maintenance`.
-5. Run `I - Full (re)Install`.
+2. Choose `I - Install New`.
+3. Select `CMaNGOS` or `vMaNGOS`.
+4. Select the lane, enter a new game-container CTID, and let the wizard run the full install.
 
 ## First-Run Bootstrap
 
@@ -241,7 +242,7 @@ For Classic/TBC/vMaNGOS, the launcher will work from the selected install path c
 
 ### 2. Create or attach the game container
 
-If the game container for the selected path does not exist yet, the launcher offers to create or attach it through the stack-control flow.
+For new installs, use `I - Install New`; the wizard selects the lane, creates the game container, and starts the full install. Existing lanes can still be managed through the per-path service and maintenance menus.
 
 ### 3. Run a full install
 
