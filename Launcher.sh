@@ -183,6 +183,8 @@ normalize_config_env() {
   append_config_default_line "CMANGOS_STANDARD_GIT_BRANCH" "\"${DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}\""
   append_config_default_line "CMANGOS_REPO_URL" "\"${DEFAULT_CMANGOS_REPO_URL}\""
   append_config_default_line "CMANGOS_GIT_BRANCH" "\"${DEFAULT_CMANGOS_GIT_BRANCH}\""
+  append_config_default_line "CLASSIC_INSTANCE_NAMES" '("main")'
+  append_config_default_line "TBC_INSTANCE_NAMES" '("main")'
   append_config_default_line "TORTOISE_REPO_URL" "\"${DEFAULT_TORTOISE_REPO_URL}\""
   append_config_default_line "TORTOISE_GIT_BRANCH" "\"${DEFAULT_TORTOISE_GIT_BRANCH}\""
   append_config_default_line "VMANGOS_INSTANCE_NAMES" '("main" "ahbot")'
@@ -433,16 +435,17 @@ auto_detect_stack() {
   DB_CTID=$(awk '$3=="spp-db"    {print $1}' <<< "$_pct") || true
   WEB_CTID=$(awk '$3=="spp-web"  {print $1}' <<< "$_pct") || true
   LOGIN_CTID=$(awk '$3=="spp-login" {print $1}' <<< "$_pct") || true
-  local _exp _ct _vm_target _vm_host _vm_name
+  local _exp _ct _vm_target _vm_host _vm_name _cm_target
   local -a _vm_names
+  GAME_CTIDS=()
   if declare -p VMANGOS_INSTANCE_NAMES >/dev/null 2>&1; then
     _vm_names=("${VMANGOS_INSTANCE_NAMES[@]}")
   else
     _vm_names=("main" "ahbot")
   fi
-  for _exp in classic tbc wotlk; do
-    _ct=$(awk -v name="spp-$_exp" '$3==name {print $1}' <<< "$_pct") || true
-    [[ -n "$_ct" ]] && GAME_CTIDS[$_exp]=$_ct
+  for _cm_target in $(cmangos_target_list_all); do
+    _ct=$(awk -v name="$(cmangos_target_hostname "$_cm_target")" '$3==name {print $1}' <<< "$_pct") || true
+    [[ -n "$_ct" ]] && GAME_CTIDS[$_cm_target]=$_ct
   done
   for _vm_name in "${_vm_names[@]}"; do
     _vm_target="vmangos-${_vm_name}"
@@ -615,6 +618,8 @@ CMANGOS_STANDARD_REPO_URL="${CMANGOS_STANDARD_REPO_URL:-$DEFAULT_CMANGOS_STANDAR
 CMANGOS_STANDARD_GIT_BRANCH="${CMANGOS_STANDARD_GIT_BRANCH:-$DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}"
 CMANGOS_REPO_URL="${CMANGOS_REPO_URL:-$DEFAULT_CMANGOS_REPO_URL}"
 CMANGOS_GIT_BRANCH="${CMANGOS_GIT_BRANCH:-$DEFAULT_CMANGOS_GIT_BRANCH}"
+CLASSIC_INSTANCE_NAMES=("${CLASSIC_INSTANCE_NAMES[@]:-main}")
+TBC_INSTANCE_NAMES=("${TBC_INSTANCE_NAMES[@]:-main}")
 TORTOISE_REPO_URL="${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
 TORTOISE_GIT_BRANCH="${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
 CRASH_SHARE_ROOT="$CRASH_SHARE_ROOT"
@@ -755,9 +760,162 @@ vmangos_instance_name_list() {
   fi
 }
 
+cmangos_family() {
+  case "${1:-$EXPANSION}" in
+    classic|classic-*) echo "classic" ;;
+    tbc|tbc-*) echo "tbc" ;;
+    wotlk) echo "wotlk" ;;
+    *) return 1 ;;
+  esac
+}
+
+is_cmangos_target() {
+  case "${1:-$EXPANSION}" in
+    classic|classic-*|tbc|tbc-*|wotlk) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cmangos_instance_var_name() {
+  case "$1" in
+    classic) echo "CLASSIC_INSTANCE_NAMES" ;;
+    tbc) echo "TBC_INSTANCE_NAMES" ;;
+    *) return 1 ;;
+  esac
+}
+
+cmangos_instance_name_list() {
+  local family="$1"
+  local var_name
+  var_name=$(cmangos_instance_var_name "$family") || {
+    printf '%s\n' "main"
+    return 0
+  }
+  if declare -p "$var_name" >/dev/null 2>&1; then
+    local -n names_ref="$var_name"
+    printf '%s\n' "${names_ref[@]}"
+  else
+    printf '%s\n' "main"
+  fi
+}
+
+cmangos_target_list() {
+  local family="$1"
+  local name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    if [[ "$name" == "main" ]]; then
+      printf '%s\n' "$family"
+    else
+      printf '%s\n' "${family}-${name}"
+    fi
+  done < <(cmangos_instance_name_list "$family")
+}
+
+cmangos_target_list_all() {
+  cmangos_target_list classic
+  cmangos_target_list tbc
+  printf '%s\n' "wotlk"
+}
+
+cmangos_target_suffix() {
+  case "${1:-$EXPANSION}" in
+    classic|tbc|wotlk) echo "main" ;;
+    classic-*) echo "${1#classic-}" ;;
+    tbc-*) echo "${1#tbc-}" ;;
+    *) echo "" ;;
+  esac
+}
+
+cmangos_is_main_target() {
+  [[ "$(cmangos_target_suffix "${1:-$EXPANSION}")" == "main" ]]
+}
+
+cmangos_target_hostname() {
+  local target="${1:-$EXPANSION}"
+  if cmangos_is_main_target "$target"; then
+    echo "spp-$(cmangos_family "$target")"
+  else
+    echo "spp-${target}"
+  fi
+}
+
+cmangos_target_display() {
+  cmangos_target_hostname "${1:-$EXPANSION}"
+}
+
+cmangos_instance_label() {
+  local target="${1:-$EXPANSION}"
+  local family suffix
+  family=$(cmangos_family "$target") || return 1
+  suffix=$(cmangos_target_suffix "$target")
+  if [[ "$suffix" == "main" ]]; then
+    echo "${family^}"
+  else
+    echo "${family^} ${suffix}"
+  fi
+}
+
+cmangos_db_token() {
+  local target="${1:-$EXPANSION}"
+  local family suffix
+  family=$(cmangos_family "$target") || return 1
+  suffix=$(cmangos_target_suffix "$target")
+  if [[ "$suffix" == "main" ]]; then
+    printf '%s' "$family"
+    return 0
+  fi
+  suffix=$(echo "$suffix" | tr -cd '[:alnum:]')
+  printf '%s%s' "$family" "$suffix"
+}
+
+cmangos_next_target() {
+  local family="$1"
+  local max_suffix=1
+  local name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    if [[ "$name" =~ ^[0-9]+$ ]] && (( name > max_suffix )); then
+      max_suffix=$name
+    fi
+  done < <(cmangos_instance_name_list "$family")
+  max_suffix=$((max_suffix + 1))
+  printf '%s-%s' "$family" "$max_suffix"
+}
+
+ensure_cmangos_target_registered() {
+  local target="$1"
+  local family
+  local suffix
+  local var_name
+  local config_value=""
+  family=$(cmangos_family "$target") || return 1
+  suffix=$(cmangos_target_suffix "$target")
+  [[ "$suffix" == "main" ]] && return 0
+
+  var_name=$(cmangos_instance_var_name "$family") || return 1
+  local -n names_ref="$var_name"
+  local existing
+  for existing in "${names_ref[@]}"; do
+    [[ "$existing" == "$suffix" ]] && return 0
+  done
+
+  names_ref+=("$suffix")
+  local entry
+  for entry in "${names_ref[@]}"; do
+    if [[ -n "$config_value" ]]; then
+      config_value="${config_value} "
+    fi
+    config_value="${config_value}\"${entry}\""
+  done
+  config_value="(${config_value})"
+  set_or_append_config_line "$var_name" "$config_value"
+  persist_config_storage || return 1
+}
+
 declare -A VERSION_MAP
-for EXP in classic tbc wotlk; do
-  KEY=$(echo "$EXP" | tr '[:lower:]' '[:upper:]')
+for EXP in $(cmangos_target_list_all); do
+  KEY=$(cmangos_family "$EXP" | tr '[:lower:]' '[:upper:]')
   for TYPE in WORLD CORE REALM CHARS LOGS MAPS WEBSITE; do
     VAR="${KEY}_${TYPE}_VERSION"
     VERSION_MAP["$EXP:$TYPE"]="${!VAR:-0}"
@@ -890,6 +1048,7 @@ vmangos_instance_summary() {
 
 expansion_title() {
   case "$1" in
+    classic|classic-*|tbc|tbc-*|wotlk) cmangos_instance_label "$1" ;;
     vmangos|vmangos-*) vmangos_instance_label "$1" ;;
     *) echo "${1^}" ;;
   esac
@@ -897,8 +1056,8 @@ expansion_title() {
 
 expansion_settings_key() {
   case "$1" in
-    classic) echo "vanilla" ;;
-    tbc|wotlk) echo "$1" ;;
+    classic|classic-*) echo "vanilla" ;;
+    tbc|tbc-*|wotlk) cmangos_family "$1" ;;
     vmangos|vmangos-*) echo "vmangos" ;;
     *) return 1 ;;
   esac
@@ -906,9 +1065,13 @@ expansion_settings_key() {
 
 expansion_install_dir() {
   case "$1" in
-    classic) echo "/srv/mangos-classic" ;;
-    tbc) echo "/srv/mangos-tbc" ;;
-    wotlk) echo "/srv/mangos-wotlk" ;;
+    classic|classic-*|tbc|tbc-*|wotlk)
+      if cmangos_is_main_target "$1"; then
+        echo "/srv/mangos-$(cmangos_family "$1")"
+      else
+        echo "/srv/mangos-$1"
+      fi
+      ;;
     vmangos|vmangos-*) echo "/srv/vmangos" ;;
     *) return 1 ;;
   esac
@@ -918,8 +1081,8 @@ expansion_repo() {
   local repo_var
   local default_repo
   case "$1" in
-    classic) cmangos_profile_repo ;;
-    tbc) echo "https://github.com/celguar/mangos-tbc.git" ;;
+    classic|classic-*) cmangos_profile_repo ;;
+    tbc|tbc-*) echo "https://github.com/celguar/mangos-tbc.git" ;;
     wotlk) echo "https://github.com/celguar/mangos-wotlk.git" ;;
     vmangos|vmangos-*)
       default_repo=$(vmangos_default_repo "$1")
@@ -934,8 +1097,8 @@ expansion_branch() {
   local branch_var
   local default_branch
   case "$1" in
-    classic) cmangos_profile_branch ;;
-    tbc|wotlk) echo "ike3-bots" ;;
+    classic|classic-*) cmangos_profile_branch ;;
+    tbc|tbc-*|wotlk) echo "ike3-bots" ;;
     vmangos|vmangos-*)
       default_branch=$(vmangos_default_branch "$1")
       branch_var=$(vmangos_branch_var_name "$1")
@@ -947,23 +1110,32 @@ expansion_branch() {
 
 expansion_realm_db_name() {
   case "$1" in
-    classic) echo "classicrealmd" ;;
-    tbc) echo "tbcrealmd" ;;
-    wotlk) echo "wotlkrealmd" ;;
+    classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")realmd" ;;
     vmangos|vmangos-*) echo "$(vmangos_db_token "$1")realmd" ;;
     *) return 1 ;;
   esac
 }
 
 expansion_realm_id() {
-  local idx=4
+  local idx=1
   local target
   case "$1" in
-    classic) echo 1 ;;
-    tbc) echo 2 ;;
-    wotlk) echo 3 ;;
-    vmangos) echo 4 ;;
+    classic|classic-*|tbc|tbc-*|wotlk)
+      for target in $(cmangos_target_list_all); do
+        if [[ "$target" == "$1" ]]; then
+          echo "$idx"
+          return 0
+        fi
+        idx=$((idx+1))
+      done
+      return 1
+      ;;
+    vmangos)
+      idx=$((idx + $(cmangos_target_list_all | wc -l)))
+      echo "$idx"
+      ;;
     vmangos-*)
+      idx=$((idx + $(cmangos_target_list_all | wc -l)))
       for target in $(vmangos_target_list); do
         if [[ "$target" == "$1" ]]; then
           echo "$idx"
@@ -979,36 +1151,28 @@ expansion_realm_id() {
 
 expansion_world_db_name() {
   case "$1" in
-    classic) echo "classicmangos" ;;
-    tbc) echo "tbcmangos" ;;
-    wotlk) echo "wotlkmangos" ;;
+    classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")mangos" ;;
     *) return 1 ;;
   esac
 }
 
 expansion_char_db_name() {
   case "$1" in
-    classic) echo "classiccharacters" ;;
-    tbc) echo "tbccharacters" ;;
-    wotlk) echo "wotlkcharacters" ;;
+    classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")characters" ;;
     *) return 1 ;;
   esac
 }
 
 expansion_armory_db_name() {
   case "$1" in
-    classic) echo "classicarmory" ;;
-    tbc) echo "tbcarmory" ;;
-    wotlk) echo "wotlkarmory" ;;
+    classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")armory" ;;
     *) return 1 ;;
   esac
 }
 
 expansion_bots_db_name() {
   case "$1" in
-    classic) echo "classicplayerbots" ;;
-    tbc) echo "tbcplayerbots" ;;
-    wotlk) echo "wotlkplayerbots" ;;
+    classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")playerbots" ;;
     *) return 1 ;;
   esac
 }
@@ -2082,22 +2246,36 @@ show_tortoise_wip_notice() {
   read -p "Press Enter to continue..." _
 }
 
-run_guided_new_install() {
-  echo
-  echo "Preparing new install: $(expansion_title "$EXPANSION")"
+vmangos_register_instance_name() {
+  local requested_name="$1"
+  local normalized
+  normalized=$(echo "$requested_name" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/^-//; s/-$//')
+  [[ -n "$normalized" ]] || return 1
 
-  if is_vmangos; then
-    ensure_shared_stack "0" || return 1
-  else
-    ensure_shared_stack "1" || return 1
-  fi
+  local current_name
+  while IFS= read -r current_name; do
+    [[ "$current_name" == "$normalized" ]] && {
+      printf '%s' "vmangos-${normalized}"
+      return 0
+    }
+  done < <(vmangos_instance_name_list)
 
-  create_game_container_interactive || return 1
-  derive_db_names || return 1
+  VMANGOS_INSTANCE_NAMES+=("$normalized")
 
-  echo
-  echo "Starting full install for $(expansion_title "$EXPANSION") [${EXPANSION}] on CTID ${GAME_CTID}."
-  full_install
+  local config_value=""
+  local entry
+  for entry in "${VMANGOS_INSTANCE_NAMES[@]}"; do
+    if [[ -n "$config_value" ]]; then
+      config_value="${config_value} "
+    fi
+    config_value="${config_value}\"${entry}\""
+  done
+  config_value="(${config_value})"
+
+  set_or_append_config_line "VMANGOS_INSTANCE_NAMES" "$config_value"
+  persist_config_storage || return 1
+  auto_detect_stack
+  printf '%s' "vmangos-${normalized}"
 }
 
 install_new_cmangos_menu() {
@@ -2120,6 +2298,16 @@ install_new_cmangos_menu() {
 
     if [[ ${#options[@]} -eq 0 ]]; then
       echo "No uninstalled CMaNGOS lanes are available."
+      echo
+      echo "Installed CMaNGOS lanes:"
+      for exp in classic tbc; do
+        if [[ -n "${GAME_CTIDS[$exp]:-}" ]]; then
+          echo "  - $(expansion_title "$exp") [CTID ${GAME_CTIDS[$exp]}]"
+        fi
+      done
+      echo
+      echo "Use the main launcher menu to select an installed lane, then run:"
+      echo "  Maintenance -> I - Full (re)Install"
       echo
       read -p "Press Enter to return..." _
       return 1
@@ -2145,8 +2333,7 @@ install_new_cmangos_menu() {
     local index=$((NEWSEL-1))
     if [[ $index -ge 0 && $index -lt ${#options[@]} ]]; then
       EXPANSION="${options[$index]}"
-      run_guided_new_install
-      return $?
+      return 0
     fi
   done
 }
@@ -2189,22 +2376,47 @@ install_new_vmangos_menu() {
       echo
     done
 
+    echo "N - New vMaNGOS instance"
     echo "0 - Back"
     echo
     read -p "Selection: " VMNEWSEL
     VMNEWSEL="${VMNEWSEL:-}"
     [[ "$VMNEWSEL" == "0" ]] && return 1
 
+    if [[ "$VMNEWSEL" =~ ^[Nn]$ ]]; then
+      local new_instance_name new_target
+      echo
+      echo "Enter a new vMaNGOS instance name. Example: ahbot2 or test."
+      read -p "Instance name: " new_instance_name
+      new_target=$(vmangos_register_instance_name "$new_instance_name") || {
+        echo "Unable to register that vMaNGOS instance name."
+        read -p "Press Enter to continue..." _
+        continue
+      }
+      EXPANSION="$new_target"
+      return 0
+    fi
+
     [[ "$VMNEWSEL" =~ ^[0-9]+$ ]] || continue
     local index=$((VMNEWSEL-1))
     if [[ $index -ge 0 && $index -lt ${#options[@]} ]]; then
       if [[ "${options[$index]}" == "tortoise" ]]; then
-        show_tortoise_wip_notice
-        continue
+        local tortoise_target
+        tortoise_target=$(vmangos_register_instance_name "tortoise") || {
+          echo "Unable to register the tortoise instance."
+          read -p "Press Enter to continue..." _
+          continue
+        }
+        EXPANSION="$tortoise_target"
+        vmangos_persist_source_pin "$EXPANSION" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" || {
+          echo "Unable to pin the default tortoise source."
+          read -p "Press Enter to continue..." _
+          continue
+        }
+        return 0
       fi
       EXPANSION="${options[$index]}"
-      run_guided_new_install
-      return $?
+      return 0
     fi
   done
 }
@@ -3536,7 +3748,7 @@ maintenance_menu() {
       1) core_menu ;;
       2) database_menu ;;
       3)
-        if ! require_existing_game_container; then
+        if ! ensure_service_target_context; then
           read -p "Unable to continue. Press Enter to return..." _
         elif ! install_data; then
           read -p "Data pack install failed. Press Enter to return..." _
@@ -3545,11 +3757,11 @@ maintenance_menu() {
 	  4) config_menu ;;
       I)
         read -p "Type YES to continue: " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && require_existing_game_container && full_install
+        [[ "$CONFIRM" == "YES" ]] && ensure_service_target_context && full_install
         ;;
 	  S) 	 
         read -p "Type YES to continue: " CONFIRM
-        [[ "$CONFIRM" == "YES" ]] && require_existing_game_container && sync_settings_repo ;;
+        [[ "$CONFIRM" == "YES" ]] && ensure_service_target_context && sync_settings_repo ;;
       0) return ;;
     esac
   done
@@ -3636,7 +3848,7 @@ core_menu() {
         if is_vmangos; then
             read -p "Confirm vMaNGOS release clean rebuild? (YES): " CONFIRM
             if [[ "$CONFIRM" == "YES" ]]; then
-              require_existing_game_container || continue
+              ensure_service_target_context || continue
               vmangos_run_lane_action release-clean
               echo
               read -p "vMaNGOS release clean rebuild finished. Press Enter to continue..." _
@@ -3644,7 +3856,7 @@ core_menu() {
         else
           read -p "Confirm rebuild? (Y/N): " CONFIRM
           if [[ "${CONFIRM^^}" == "Y" ]]; then
-            require_existing_game_container || continue
+            ensure_service_target_context || continue
             pct exec "$GAME_CTID" -- rm -rf /opt/source
             comp_server
             echo
@@ -3656,7 +3868,7 @@ core_menu() {
         if is_vmangos; then
             read -p "Confirm vMaNGOS release update + rebuild? (YES): " CONFIRM
             if [[ "$CONFIRM" == "YES" ]]; then
-              require_existing_game_container || continue
+              ensure_service_target_context || continue
               vmangos_run_lane_action release-update
               echo
               read -p "vMaNGOS release update + rebuild finished. Press Enter to continue..." _
@@ -3664,7 +3876,7 @@ core_menu() {
         else
           read -p "Confirm update? (YES): " CONFIRM
           if [[ "$CONFIRM" == "YES" ]]; then
-            require_existing_game_container || continue
+            ensure_service_target_context || continue
             update_core
             echo
             read -p "Core update finished. Press Enter to continue..." _
@@ -3684,7 +3896,7 @@ core_menu() {
         if is_vmangos; then
           read -p "Confirm bridge debug build? (YES): " CONFIRM
           if [[ "$CONFIRM" == "YES" ]]; then
-            require_existing_game_container || continue
+            ensure_service_target_context || continue
               vmangos_run_lane_action debug
               echo
               read -p "Default vMaNGOS debug build finished. Press Enter to continue..." _
@@ -3695,7 +3907,7 @@ core_menu() {
         if is_vmangos; then
             read -p "Confirm custom vMaNGOS debug build? (YES): " CONFIRM
             if [[ "$CONFIRM" == "YES" ]]; then
-              require_existing_game_container || continue
+              ensure_service_target_context || continue
               vmangos_run_lane_action custom-debug
               echo
               read -p "Custom vMaNGOS debug build finished. Press Enter to continue..." _
