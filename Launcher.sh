@@ -2518,6 +2518,74 @@ edit_crash_share_root() {
   read -p "Press Enter to continue..." _
 }
 
+edit_operator_sources() {
+  local new_repo new_profile new_std_repo new_std_branch new_cm_repo new_cm_branch
+  local new_vm_repo new_vm_branch new_world_url new_pack_url
+
+  echo
+  echo "Operator-owned source settings"
+  echo "Leave blank to keep the current value."
+  echo
+  echo "Website repo: ${WEBSITE_REPO:-<unset>}"
+  echo "CMaNGOS build profile: $(cmangos_build_profile) ($(cmangos_build_profile_label))"
+  echo "CMaNGOS standard repo: ${CMANGOS_STANDARD_REPO_URL:-<unset>}"
+  echo "CMaNGOS standard branch: ${CMANGOS_STANDARD_GIT_BRANCH:-<unset>}"
+  echo "CMaNGOS repo lane repo: ${CMANGOS_REPO_URL:-<unset>}"
+  echo "CMaNGOS repo lane branch: ${CMANGOS_GIT_BRANCH:-<unset>}"
+  echo "vMaNGOS repo: ${VMANGOS_REPO_URL:-<unset>}"
+  echo "vMaNGOS branch: ${VMANGOS_GIT_BRANCH:-<unset>}"
+  echo "vMaNGOS world DB URL: ${VMANGOS_WORLD_DB_URL:-<unset>}"
+  echo "vMaNGOS data pack URL: ${VMANGOS_DATA_PACK_URL:-<unset>}"
+  echo
+
+  read -p "Website repo [${WEBSITE_REPO:-}]: " new_repo
+  read -p "CMaNGOS build profile (standard/repo) [$(cmangos_build_profile)]: " new_profile
+  read -p "CMaNGOS standard repo [${CMANGOS_STANDARD_REPO_URL:-}]: " new_std_repo
+  read -p "CMaNGOS standard branch [${CMANGOS_STANDARD_GIT_BRANCH:-}]: " new_std_branch
+  read -p "CMaNGOS repo lane repo [${CMANGOS_REPO_URL:-}]: " new_cm_repo
+  read -p "CMaNGOS repo lane branch [${CMANGOS_GIT_BRANCH:-}]: " new_cm_branch
+  read -p "vMaNGOS repo [${VMANGOS_REPO_URL:-}]: " new_vm_repo
+  read -p "vMaNGOS branch [${VMANGOS_GIT_BRANCH:-}]: " new_vm_branch
+  read -p "vMaNGOS world DB URL [${VMANGOS_WORLD_DB_URL:-}]: " new_world_url
+  read -p "vMaNGOS data pack URL [${VMANGOS_DATA_PACK_URL:-}]: " new_pack_url
+
+  if [[ -n "$new_repo" ]]; then
+    WEBSITE_REPO="$new_repo"
+    set_config_value "WEBSITE_REPO" "$new_repo"
+  fi
+  if [[ -n "$new_profile" ]]; then
+    case "$new_profile" in
+      standard|repo)
+        CMANGOS_BUILD_PROFILE="$new_profile"
+        set_config_value "CMANGOS_BUILD_PROFILE" "$new_profile"
+        ;;
+      *) echo "Ignoring unknown CMaNGOS build profile: $new_profile" ;;
+    esac
+  fi
+  [[ -n "$new_std_repo" ]] && { CMANGOS_STANDARD_REPO_URL="$new_std_repo"; set_config_value "CMANGOS_STANDARD_REPO_URL" "$new_std_repo"; }
+  [[ -n "$new_std_branch" ]] && { CMANGOS_STANDARD_GIT_BRANCH="$new_std_branch"; set_config_value "CMANGOS_STANDARD_GIT_BRANCH" "$new_std_branch"; }
+  [[ -n "$new_cm_repo" ]] && { CMANGOS_REPO_URL="$new_cm_repo"; set_config_value "CMANGOS_REPO_URL" "$new_cm_repo"; }
+  [[ -n "$new_cm_branch" ]] && { CMANGOS_GIT_BRANCH="$new_cm_branch"; set_config_value "CMANGOS_GIT_BRANCH" "$new_cm_branch"; }
+  [[ -n "$new_vm_repo" ]] && { VMANGOS_REPO_URL="$new_vm_repo"; set_config_value "VMANGOS_REPO_URL" "$new_vm_repo"; }
+  [[ -n "$new_vm_branch" ]] && { VMANGOS_GIT_BRANCH="$new_vm_branch"; set_config_value "VMANGOS_GIT_BRANCH" "$new_vm_branch"; }
+  [[ -n "$new_world_url" ]] && { VMANGOS_WORLD_DB_URL="$new_world_url"; set_config_value "VMANGOS_WORLD_DB_URL" "$new_world_url"; }
+  [[ -n "$new_pack_url" ]] && { VMANGOS_DATA_PACK_URL="$new_pack_url"; set_config_value "VMANGOS_DATA_PACK_URL" "$new_pack_url"; }
+
+  WEBSITE_REPO="${WEBSITE_REPO:-$DEFAULT_WEBSITE_REPO}"
+  CMANGOS_BUILD_PROFILE="${CMANGOS_BUILD_PROFILE:-repo}"
+  CMANGOS_STANDARD_REPO_URL="${CMANGOS_STANDARD_REPO_URL:-$DEFAULT_CMANGOS_STANDARD_REPO_URL}"
+  CMANGOS_STANDARD_GIT_BRANCH="${CMANGOS_STANDARD_GIT_BRANCH:-$DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}"
+  CMANGOS_REPO_URL="${CMANGOS_REPO_URL:-$DEFAULT_CMANGOS_REPO_URL}"
+  CMANGOS_GIT_BRANCH="${CMANGOS_GIT_BRANCH:-$DEFAULT_CMANGOS_GIT_BRANCH}"
+  TORTOISE_REPO_URL="${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+  TORTOISE_GIT_BRANCH="${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
+  VMANGOS_REPO_URL="${VMANGOS_REPO_URL:-$DEFAULT_VMANGOS_REPO_URL}"
+  VMANGOS_GIT_BRANCH="${VMANGOS_GIT_BRANCH:-$DEFAULT_VMANGOS_GIT_BRANCH}"
+
+  echo "Operator-owned source settings saved."
+  read -p "Press Enter to continue..." _
+}
+
 edit_cmangos_source_profile() {
   local current_profile new_profile
   local repo_var branch_var current_repo current_branch new_repo new_branch
@@ -3425,16 +3493,17 @@ config_menu() {
     echo
     echo "1 - Update Bot Conf from Repo"
     echo "2 - Crash Share Root: (${CRASH_SHARE_ROOT})"
+    echo "3 - Source URLs and Branches"
     if has_cmangos_source_profile; then
-      echo "3 - CMaNGOS Build Profile"
+      echo "4 - CMaNGOS Build Profile"
       echo "    Profile: $(cmangos_build_profile) ($(cmangos_build_profile_label))"
       echo "    Repo: $(expansion_repo "$EXPANSION")"
       echo "    Branch: $(expansion_branch "$EXPANSION")"
     fi
     if is_vmangos; then
-      echo "3 - vMaNGOS Instance Names"
+      echo "4 - vMaNGOS Instance Names"
       echo "    $(vmangos_instance_summary)"
-      echo "4 - vMaNGOS Source Pin"
+      echo "5 - vMaNGOS Source Pin"
       echo "    Repo: $(expansion_repo "$EXPANSION")"
       echo "    Branch: $(expansion_branch "$EXPANSION")"
     fi
@@ -3452,13 +3521,16 @@ config_menu() {
         edit_crash_share_root
         ;;
       3)
+        edit_operator_sources
+        ;;
+      4)
         if is_vmangos; then
           edit_vmangos_instance_names
         elif has_cmangos_source_profile; then
           edit_cmangos_source_profile
         fi
         ;;
-      4)
+      5)
         if is_vmangos; then
           edit_vmangos_source_pin
         fi

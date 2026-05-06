@@ -61,7 +61,7 @@ showcase-spp-web-news.jpg
 | Classic | Supported | Shared-services path. Uses shared DB, login, and website topology. Source profile can be switched between standard CMaNGOS and repo lane. |
 | TBC | Supported | Shared-services path. Uses shared DB, login, and website topology. |
 | vMaNGOS | Supported | Shares the common MariaDB container, but hosts its own `realmd` inside the game LXC instead of using `spp-login`. |
-| WotLK | WIP Stub | Visible in `Launcher-fork.sh`, but intentionally stubbed so unfinished flows are not runnable yet. |
+| WotLK | WIP | Not shown as a valid install lane until the install flow is proven. |
 
 ## Build Lanes
 
@@ -85,7 +85,7 @@ For Classic/CMaNGOS, the active profile can also be changed from:
 Maintenance -> Config Settings -> CMaNGOS Build Profile
 ```
 
-`Launcher.sh` exposes the Classic/CMaNGOS profile override through `CMaNGOS Build Profile`; `Launcher-fork.sh` also exposes the wider `Source URLs and Branches` operator menu for all pinned sources.
+`Launcher.sh` exposes both the Classic/CMaNGOS profile override and the wider `Source URLs and Branches` operator menu for pinned sources.
 
 The top-level menu shows installed lanes only. Use `I - Install New` to select a family:
 
@@ -140,7 +140,7 @@ The first installed Classic-family path becomes the shared realm owner. That own
 
 ### vMaNGOS/Turtle-family topology
 
-vMaNGOS is available as a separate install path in the forked launcher:
+vMaNGOS is available as a separate install path in `Launcher.sh`:
 
 - it shares the same MariaDB container and website
 - each vMaNGOS-family core hosts `realmd` inside its own game LXC
@@ -149,7 +149,7 @@ vMaNGOS is available as a separate install path in the forked launcher:
 
 ### WotLK note
 
-WotLK still appears in the install-path list, but `Launcher-fork.sh` intentionally treats it as a stubbed work-in-progress entry. It remains visible for planning and future work, but the forked launcher will not enter the unfinished WotLK flows yet.
+WotLK remains a planning target, but it should stay out of the valid install menu until the install flow is complete.
 
 The planned WotLK build direction is [`mod-playerbots`](https://github.com/mod-playerbots/mod-playerbots).
 
@@ -175,12 +175,12 @@ SSH into the Proxmox host:
 ssh root@<proxmox-ip>
 ```
 
-Clone the repo and run the forked launcher:
+Clone the repo and run the launcher:
 
 ```bash
 git clone https://github.com/japtenks/spp-cmangos-prox.git
 cd spp-cmangos-prox
-bash Launcher-fork.sh
+bash Launcher.sh
 ```
 
 Then:
@@ -520,8 +520,7 @@ If no custom vMaNGOS source pin is set, the launcher falls back to `codex/ahbot-
 | `./config.env` | launcher credentials and detected container settings |
 | `./Settings/` | config templates deployed by install path |
 | `./sql/` | SQL assets used by the launcher |
-| `./Launcher.sh` | legacy launcher kept intact |
-| `./Launcher-fork.sh` | forked launcher with the newer shared-topology and config model |
+| `./Launcher.sh` | main launcher with shared-topology and config model |
 
 ### Inside containers
 
