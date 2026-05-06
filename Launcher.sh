@@ -976,11 +976,21 @@ vmangos_instance_label() {
 }
 
 vmangos_default_repo() {
-  printf '%s' "$DEFAULT_VMANGOS_REPO_URL"
+  local target="${1:-$EXPANSION}"
+  if vmangos_is_tortoise_target "$target"; then
+    printf '%s' "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+  else
+    printf '%s' "$DEFAULT_VMANGOS_REPO_URL"
+  fi
 }
 
 vmangos_default_branch() {
-  printf '%s' "$DEFAULT_VMANGOS_GIT_BRANCH"
+  local target="${1:-$EXPANSION}"
+  if vmangos_is_tortoise_target "$target"; then
+    printf '%s' "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
+  else
+    printf '%s' "$DEFAULT_VMANGOS_GIT_BRANCH"
+  fi
 }
 
 vmangos_build_lane_label() {
