@@ -100,7 +100,9 @@ CMaNGOS Classic supports stock-vs-repo/module build profiles. vMaNGOS Classic us
 
 ### Tortoise data extraction planning
 
-Tortoise/Turtle WoW targets client `1.18.1` build `7272`. The future LXC lane should stage extracted assets under a dedicated path instead of reusing vanilla CMaNGOS data blindly:
+Tortoise/Turtle WoW targets client `1.18.1` build `7272`. The upstream `faemwow/tortoise-wow` project currently recommends Linux builds on Ubuntu 22.04-class environments and calls out `ACE` as an additional dependency on top of the usual MaNGOS stack.
+
+The future LXC lane should stage extracted assets under a dedicated path instead of reusing vanilla CMaNGOS data blindly:
 
 ```text
 /opt/spp-assets/tortoise/data/dbc
@@ -109,7 +111,22 @@ Tortoise/Turtle WoW targets client `1.18.1` build `7272`. The future LXC lane sh
 /opt/spp-assets/tortoise/data/mmaps
 ```
 
-The `faemwow/tortoise-wow` fork includes Linux/container-oriented extraction guidance. The launcher should eventually convert that into a dedicated Proxmox/LXC install lane, likely `tortoise`, that prompts for a mounted Turtle client path, runs the extractors once, validates the four output directories, then imports them during full install.
+The upstream extractor flow is currently Docker-oriented: set `TORTOISE_DATA_DIR`, set `WOW_CLIENT_DIR` to a local Turtle 1.18.1 client, then run `run-local-extractors.sh` inside `ghcr.io/faemwow/tortoise-wow-mangosd:latest`. That is a one-time extraction pass and upstream notes that it can take hours.
+
+The current upstream DB bootstrap is also still manual:
+
+```text
+1. import sql/create_databases.sql
+2. import the SQL files in sql/base
+3. run mangosd so it can apply and track updates
+```
+
+The launcher should eventually convert that into a dedicated Proxmox/LXC install lane, likely `tortoise`, that:
+
+- prompts for a mounted Turtle client path
+- runs the extractor flow once and validates `dbc/maps/vmaps/mmaps`
+- imports the upstream Turtle SQL bootstrap in the right order
+- then hands off to the normal service/config flow inside the game LXC
 
 ## What The Launcher Does
 

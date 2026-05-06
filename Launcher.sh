@@ -2237,12 +2237,13 @@ show_tortoise_wip_notice() {
   echo "Tortoise/Turtle WoW belongs in the vMaNGOS-family install lane."
   echo "The build should be wired like vMaNGOS, but its SQL/data/config install path is not proven yet."
   echo "It should share the MariaDB container and host realmd in its own game LXC."
+  echo "Upstream currently targets Turtle client 1.18.1 build 7272, recommends Ubuntu 22.04-class Linux builds, and adds ACE to the usual MaNGOS dependency set."
   echo
   echo "Planned source default:"
   echo "  Repo: ${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
   echo "  Branch: ${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
   echo
-  echo "Next work item: add tortoise as a real LXC target with Turtle 1.18.1 DB import and data extraction."
+  echo "Next work item: add tortoise as a real LXC target with upstream-style DB bootstrap and Docker-based data extraction."
   read -p "Press Enter to continue..." _
 }
 
