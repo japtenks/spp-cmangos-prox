@@ -4112,6 +4112,61 @@ apply_vmangos_build_fix_patch() {
   "
 }
 
+apply_tortoise_cmake_compat_patch() {
+  vmangos_is_tortoise_target "$EXPANSION" || return 0
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -e
+    cd /opt/source
+    mysql_patch_file='cmake/FindMySQL.cmake'
+    rapidjson_patch_file='dep/include/rapidjson/document.h'
+
+    [[ -f \"\$mysql_patch_file\" ]] || {
+      echo 'Tortoise CMake compatibility patch skipped: cmake/FindMySQL.cmake not found.'
+      exit 0
+    }
+
+    if grep -Fq 'cmake_policy(SET CMP0153 OLD)' \"\$mysql_patch_file\"; then
+      echo 'Tortoise CMake compatibility patch already present.'
+    else
+      tmp_file=\$(mktemp)
+      {
+        printf '%s\n' 'if(POLICY CMP0153)'
+        printf '%s\n' '  cmake_policy(SET CMP0153 OLD)'
+        printf '%s\n' 'endif()'
+        cat \"\$mysql_patch_file\"
+      } > \"\$tmp_file\"
+      mv \"\$tmp_file\" \"\$mysql_patch_file\"
+
+      echo 'Applied Tortoise CMake compatibility patch for CMP0153.'
+    fi
+
+    [[ -f \"\$rapidjson_patch_file\" ]] || {
+      echo 'Tortoise RapidJSON compatibility patch skipped: dep/include/rapidjson/document.h not found.'
+      exit 0
+    }
+
+    if grep -Fq 'GenericStringRef& operator=(const GenericStringRef& rhs) = delete;' \"\$rapidjson_patch_file\"; then
+      echo 'Tortoise RapidJSON compatibility patch already present.'
+    else
+      perl -0pi -e 's/GenericStringRef& operator=\\(const GenericStringRef& rhs\\) \\{ s = rhs\\.s; length = rhs\\.length; \\}/GenericStringRef\\& operator=(const GenericStringRef\\& rhs) = delete;/g' \"\$rapidjson_patch_file\"
+
+      if grep -Fq 'GenericStringRef& operator=(const GenericStringRef& rhs) = delete;' \"\$rapidjson_patch_file\"; then
+        echo 'Applied Tortoise RapidJSON compatibility patch for GCC 14.'
+      else
+        echo 'Failed to apply Tortoise RapidJSON compatibility patch.'
+        exit 1
+      fi
+    fi
+
+    perl -0pi -e 's/strcmp\\(oldEmail, newEmail\\) == NULL/strcmp(oldEmail, newEmail) == 0/g; s/strcmp\\(newEmail, newEmail2\\) != NULL/strcmp(newEmail, newEmail2) != 0/g' src/game/Commands/Commands.cpp
+    perl -0pi -e 's/teamIndex == TEAM_ALLIANCE/teamIndex == BG_TEAM_ALLIANCE/g' src/game/Battlegrounds/BattleGroundSV.cpp
+    perl -0pi -e 's/GB = MB \\* 1000/GB = MB * 1000LL/g; s/ftell\\(pFile\\) > 50 \\* GB/ftell(pFile) > 50LL * GB/g' src/shared/Log.cpp
+
+    echo 'Applied Tortoise source compatibility and warning cleanup patch set.'
+  "
+}
+
 vmangos_persist_source_pin() {
   local target="${1:-$EXPANSION}"
   local repo="$2"
@@ -4332,6 +4387,7 @@ vmangos_run_lane_action() {
   fi
 
   apply_vmangos_build_fix_patch || return 1
+  apply_tortoise_cmake_compat_patch || return 1
   extractors_flag=$(vmangos_build_extractors_flag)
 
   stop_mangosd_managed "vmangos-lane-build"
