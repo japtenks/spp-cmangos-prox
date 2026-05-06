@@ -994,6 +994,18 @@ vmangos_build_lane_label() {
   fi
 }
 
+vmangos_is_tortoise_target() {
+  local target="${1:-$EXPANSION}"
+  local suffix
+  local repo
+
+  suffix=$(vmangos_target_suffix "$target")
+  [[ "$suffix" == "tortoise" ]] && return 0
+
+  repo=$(expansion_repo "$target" 2>/dev/null || true)
+  [[ "$repo" == "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" ]]
+}
+
 vmangos_repo_var_name() {
   local token
   token=$(vmangos_config_token "${1:-$EXPANSION}")
@@ -4013,6 +4025,11 @@ apply_vmangos_build_fix_patch() {
   local BRANCH
   BRANCH=$(expansion_branch "$EXPANSION") || return 1
 
+  if vmangos_is_tortoise_target "$EXPANSION"; then
+    echo "Skipping legacy vMaNGOS build fix patch for Tortoise/Turtle lane."
+    return 0
+  fi
+
   if [[ "$BRANCH" == "codex/vmangos-bot-loot-roll-port" ]]; then
     echo "Skipping legacy vMaNGOS build fix patch for $BRANCH."
     return 0
@@ -4252,8 +4269,9 @@ vmangos_run_lane_action() {
 
   local action="$1"
   local repo
-  repo=$(vmangos_default_repo "$EXPANSION")
-  local branch="$DEFAULT_VMANGOS_GIT_BRANCH"
+  repo=$(expansion_repo "$EXPANSION")
+  local branch
+  branch=$(expansion_branch "$EXPANSION")
   local build_type="RelWithDebInfo"
   local build_dir_name="build"
   local reconfigure_mode="fresh"
@@ -4273,8 +4291,8 @@ vmangos_run_lane_action() {
       ;;
     custom-debug|ahbot-release|ahbot-debug)
       vmangos_prompt_source_values \
-        "$(vmangos_default_repo "$EXPANSION")" \
-        "$DEFAULT_VMANGOS_GIT_BRANCH" \
+        "$(expansion_repo "$EXPANSION")" \
+        "$(expansion_branch "$EXPANSION")" \
         "Custom vMaNGOS source pin for $(expansion_title "$EXPANSION"):"
       repo="$VMANGOS_PROMPTED_REPO"
       branch="$VMANGOS_PROMPTED_BRANCH"
