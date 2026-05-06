@@ -4279,9 +4279,14 @@ vmangos_run_lane_action() {
 
   local action="$1"
   local repo
-  repo=$(expansion_repo "$EXPANSION")
   local branch
-  branch=$(expansion_branch "$EXPANSION")
+  if vmangos_is_tortoise_target "$EXPANSION"; then
+    repo="${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+    branch="${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
+  else
+    repo=$(expansion_repo "$EXPANSION")
+    branch=$(expansion_branch "$EXPANSION")
+  fi
   local build_type="RelWithDebInfo"
   local build_dir_name="build"
   local reconfigure_mode="fresh"
