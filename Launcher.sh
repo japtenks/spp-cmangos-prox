@@ -2439,8 +2439,20 @@ install_new_menu() {
     FAMILY_SEL="${FAMILY_SEL:-}"
 
     case "$FAMILY_SEL" in
-      1) install_new_cmangos_menu && return ;;
-      2) install_new_vmangos_menu && return ;;
+      1)
+        if install_new_cmangos_menu; then
+          ensure_expansion_context || continue
+          ensure_game_container || continue
+          return
+        fi
+        ;;
+      2)
+        if install_new_vmangos_menu; then
+          ensure_expansion_context || continue
+          ensure_game_container || continue
+          return
+        fi
+        ;;
       0) return 1 ;;
     esac
   done
