@@ -187,7 +187,7 @@ normalize_config_env() {
   append_config_default_line "TBC_INSTANCE_NAMES" '("main")'
   append_config_default_line "TORTOISE_REPO_URL" "\"${DEFAULT_TORTOISE_REPO_URL}\""
   append_config_default_line "TORTOISE_GIT_BRANCH" "\"${DEFAULT_TORTOISE_GIT_BRANCH}\""
-  set_or_append_config_line "VMANGOS_INSTANCE_NAMES" '("tortoise")'
+  append_config_default_line "VMANGOS_INSTANCE_NAMES" '("tortoise" "tortoise-ptr" "tortoise-test" "tortoise-beta")'
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
   append_config_default_line "VMANGOS_GIT_BRANCH" "\"${DEFAULT_VMANGOS_BRIDGE_BRANCH}\""
@@ -617,7 +617,7 @@ IP_CLASSIC="$IP_CLASSIC"
 IP_TBC="$IP_TBC"
 IP_WOTLK="$IP_WOTLK"
 IP_VMANGOS="$IP_VMANGOS"
-VMANGOS_INSTANCE_NAMES=("tortoise")
+VMANGOS_INSTANCE_NAMES=("tortoise" "tortoise-ptr" "tortoise-test" "tortoise-beta")
 VMANGOS_WORLD_DB_URL="${VMANGOS_WORLD_DB_URL:-https://github.com/brotalnia/database/raw/master/world_full_14_june_2021.7z}"
 VMANGOS_DATA_PACK_URL="${VMANGOS_DATA_PACK_URL:-https://github.com/japtenks/spp-cmangos-prox/releases/download/assets/vmangos-bropack-v25.zip}"
 CMANGOS_BUILD_PROFILE="${CMANGOS_BUILD_PROFILE:-repo}"
@@ -695,7 +695,9 @@ persist_config_storage
 
 # Keep install-path ordering canonical even if an older config.env exists.
 ALLOWED_EXPANSIONS=("vmangos-tortoise")
-VMANGOS_INSTANCE_NAMES=("tortoise")
+if ! declare -p VMANGOS_INSTANCE_NAMES >/dev/null 2>&1; then
+  VMANGOS_INSTANCE_NAMES=("tortoise" "tortoise-ptr" "tortoise-test" "tortoise-beta")
+fi
 LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
 CONFIG_ENV_ENCRYPTION="${CONFIG_ENV_ENCRYPTION:-0}"
 LAUNCHER_AUTO_UPDATE_ON_START="${LAUNCHER_AUTO_UPDATE_ON_START:-0}"
@@ -3210,7 +3212,7 @@ update_db_conf() {
   if is_vmangos "$TARGET_EXPANSION"; then
     if pct exec "$GAME_CTID" -- test -f "${INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
       pct exec "$GAME_CTID" -- bash -c "
-        if [[ '${TARGET_EXPANSION}' == 'vmangos-tortoise' ]]; then
+        if [[ '${TARGET_EXPANSION}' == vmangos-tortoise* ]]; then
           sed -i \
           's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
           ${INSTALL_DIR}/etc/realmd.conf
@@ -3275,7 +3277,7 @@ update_db_conf() {
 
     pct exec "$GAME_CTID" -- bash -c "
       if [[ '$EXP' == vmangos* ]]; then
-        if [[ '$EXP' == 'vmangos-tortoise' ]]; then
+        if [[ '$EXP' == vmangos-tortoise* ]]; then
           sed -i \
           -e 's|^RealmID *=.*|RealmID = ${REALM_ID}|' \
           -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
@@ -4407,7 +4409,7 @@ vmangos_configure_build_dir() {
 
     configure_lane() {
       cd /opt/source
-      if [[ '${EXPANSION}' == 'vmangos-tortoise' ]]; then
+      if [[ '${EXPANSION}' == vmangos-tortoise* ]]; then
         cmake -S . -B \"\$BUILD_DIR\" \
           -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
           -DCMAKE_BUILD_TYPE=${build_type} \
@@ -4465,13 +4467,8 @@ vmangos_run_lane_action() {
   local action="$1"
   local repo
   local branch
-  if vmangos_is_tortoise_target "$EXPANSION"; then
-    repo="${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
-    branch="${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
-  else
-    repo=$(expansion_repo "$EXPANSION")
-    branch=$(expansion_branch "$EXPANSION")
-  fi
+  repo=$(expansion_repo "$EXPANSION")
+  branch=$(expansion_branch "$EXPANSION")
   local build_type="RelWithDebInfo"
   local build_dir_name="build"
   local reconfigure_mode="fresh"
@@ -7117,12 +7114,157 @@ snapjaw_target() {
   printf '%s' "vmangos-tortoise"
 }
 
+snapjaw_channel_branch() {
+  case "${1:-stable}" in
+    stable|tortoise) printf '%s' "main" ;;
+    ptr) printf '%s' "ptr" ;;
+    test) printf '%s' "test" ;;
+    beta) printf '%s' "beta" ;;
+    *) printf '%s' "${DEFAULT_TORTOISE_GIT_BRANCH}" ;;
+  esac
+}
+
+snapjaw_instance_name_to_target() {
+  local instance_name="$1"
+  if [[ "$instance_name" == tortoise* ]]; then
+    printf 'vmangos-%s' "$instance_name"
+  else
+    printf 'vmangos-tortoise-%s' "$instance_name"
+  fi
+}
+
+snapjaw_db_token() {
+  local target="${1:-$EXPANSION}"
+  local suffix
+  suffix=$(vmangos_target_suffix "$target")
+  suffix="${suffix#tortoise}"
+  suffix="${suffix#-}"
+  if [[ -z "$suffix" ]]; then
+    suffix="stable"
+  fi
+  suffix=$(echo "$suffix" | tr -cd '[:alnum:]')
+  printf '%s' "$suffix"
+}
+
+snapjaw_persist_instance_names() {
+  local config_value=""
+  local entry
+  for entry in "${VMANGOS_INSTANCE_NAMES[@]}"; do
+    [[ -n "$entry" ]] || continue
+    if [[ -n "$config_value" ]]; then
+      config_value="${config_value} "
+    fi
+    config_value="${config_value}\"${entry}\""
+  done
+  set_or_append_config_line "VMANGOS_INSTANCE_NAMES" "(${config_value})"
+  persist_config_storage
+}
+
+snapjaw_ensure_instance_name() {
+  local requested_name="$1"
+  local existing
+  for existing in "${VMANGOS_INSTANCE_NAMES[@]}"; do
+    [[ "$existing" == "$requested_name" ]] && return 0
+  done
+  VMANGOS_INSTANCE_NAMES+=("$requested_name")
+  snapjaw_persist_instance_names
+}
+
+snapjaw_seed_channel_defaults() {
+  local defaults=("tortoise" "tortoise-ptr" "tortoise-test" "tortoise-beta")
+  local entry
+  if ! declare -p VMANGOS_INSTANCE_NAMES >/dev/null 2>&1 || [[ ${#VMANGOS_INSTANCE_NAMES[@]} -eq 0 ]]; then
+    VMANGOS_INSTANCE_NAMES=("${defaults[@]}")
+  else
+    for entry in "${defaults[@]}"; do
+      snapjaw_ensure_instance_name "$entry" || return 1
+    done
+  fi
+}
+
+vmangos_is_tortoise_target() {
+  local target="${1:-$EXPANSION}"
+  local suffix
+  suffix=$(vmangos_target_suffix "$target")
+  [[ "$suffix" == "tortoise" || "$suffix" == tortoise-* ]]
+}
+
+vmangos_instance_label() {
+  local suffix
+  suffix=$(vmangos_target_suffix "${1:-$EXPANSION}")
+  case "$suffix" in
+    tortoise) echo "SnapJaw Stable" ;;
+    tortoise-*) echo "SnapJaw ${suffix#tortoise-}" ;;
+    "") echo "SnapJaw" ;;
+    *) echo "vMaNGOS ${suffix^}" ;;
+  esac
+}
+
+expansion_realm_db_name() {
+  case "$1" in
+    vmangos|vmangos-*)
+      if vmangos_is_tortoise_target "$1"; then
+        echo "$(snapjaw_db_token "$1")realmd"
+      else
+        echo "$(vmangos_db_token "$1")realmd"
+      fi
+      ;;
+    classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")realmd" ;;
+    *) return 1 ;;
+  esac
+}
+
+derive_db_names() {
+  case "$EXPANSION" in
+    vmangos|vmangos-*)
+      if vmangos_is_tortoise_target "$EXPANSION"; then
+        DB_KEY="$(snapjaw_db_token "$EXPANSION")"
+        WORLD_DB="${DB_KEY}mangos"
+      else
+        DB_KEY="$(vmangos_db_token "$EXPANSION")"
+        WORLD_DB="${DB_KEY}"
+      fi
+      MAP_KEY="vmangos"
+      ;;
+    classic) DB_KEY="classic"; MAP_KEY="vanilla"; WORLD_DB="${DB_KEY}mangos" ;;
+    tbc)     DB_KEY="tbc";     MAP_KEY="tbc";     WORLD_DB="${DB_KEY}mangos" ;;
+    wotlk)   DB_KEY="wotlk";   MAP_KEY="wotlk";   WORLD_DB="${DB_KEY}mangos" ;;
+    *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
+  esac
+
+  CHAR_DB_NAME="${DB_KEY}characters"
+  LOG_DB_NAME="${DB_KEY}logs"
+  SETTINGS_KEY=$(expansion_settings_key "$EXPANSION") || return 1
+  INSTALL_DIR=$(expansion_install_dir "$EXPANSION") || return 1
+  EXPANSION_TITLE=$(expansion_title "$EXPANSION")
+
+  if is_vmangos; then
+    REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
+  elif [[ -n "${MASTER_REALMD_DB:-}" ]]; then
+    REALM_DB_NAME="$MASTER_REALMD_DB"
+  else
+    REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
+  fi
+  REALM_ID=$(expansion_realm_id "$EXPANSION") || return 1
+}
+
 snapjaw_prepare_target() {
-  VMANGOS_INSTANCE_NAMES=("tortoise")
+  snapjaw_seed_channel_defaults || return 1
   set_or_append_config_line "ALLOWED_EXPANSIONS" '("vmangos-tortoise")'
-  set_or_append_config_line "VMANGOS_INSTANCE_NAMES" '("tortoise")'
-  vmangos_persist_source_pin "$(snapjaw_target)" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" || return 1
-  EXPANSION="$(snapjaw_target)"
+  snapjaw_persist_instance_names || return 1
+  local target branch
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    case "$(vmangos_target_suffix "$target")" in
+      tortoise) branch="$(snapjaw_channel_branch stable)" ;;
+      tortoise-ptr) branch="$(snapjaw_channel_branch ptr)" ;;
+      tortoise-test) branch="$(snapjaw_channel_branch test)" ;;
+      tortoise-beta) branch="$(snapjaw_channel_branch beta)" ;;
+      *) branch="$(expansion_branch "$target" 2>/dev/null || snapjaw_channel_branch custom)" ;;
+    esac
+    vmangos_persist_source_pin "$target" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "$branch" || return 1
+  done < <(vmangos_target_list)
+  EXPANSION="${EXPANSION:-$(snapjaw_target)}"
   auto_detect_stack
   GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
 }
@@ -7161,6 +7303,133 @@ snapjaw_install_or_attach() {
   bootstrap_new_install_path || return 1
 }
 
+snapjaw_create_instance_menu() {
+  local instance_name target branch entered_branch attach_ctid create_now
+
+  print_banner
+  echo
+  echo "Create SnapJaw Instance"
+  echo
+  echo "Existing Proxmox containers:"
+  echo
+  pct list || true
+  echo
+  read -p "Attach existing CTID (blank to create a new LXC): " attach_ctid
+  attach_ctid="${attach_ctid:-}"
+  if [[ -n "$attach_ctid" && ! "$attach_ctid" =~ ^[0-9]+$ ]]; then
+    echo "CTID must be numeric."
+    read -p "Press Enter to continue..." _
+    return 1
+  fi
+
+  echo
+  read -p "Instance name (example: stable, ptr, beta, test, myrealm): " instance_name
+  instance_name=$(echo "$instance_name" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/^-//; s/-$//')
+  [[ -n "$instance_name" ]] || {
+    echo "Instance name cannot be empty."
+    read -p "Press Enter to continue..." _
+    return 1
+  }
+
+  case "$instance_name" in
+    stable) instance_name="tortoise"; branch="$(snapjaw_channel_branch stable)" ;;
+    ptr) instance_name="tortoise-ptr"; branch="$(snapjaw_channel_branch ptr)" ;;
+    test) instance_name="tortoise-test"; branch="$(snapjaw_channel_branch test)" ;;
+    beta) instance_name="tortoise-beta"; branch="$(snapjaw_channel_branch beta)" ;;
+    tortoise*) branch="$(snapjaw_channel_branch custom)" ;;
+    *) instance_name="tortoise-${instance_name}"; branch="$(snapjaw_channel_branch custom)" ;;
+  esac
+
+  echo
+  read -p "Git branch [${branch}]: " entered_branch
+  branch="${entered_branch:-$branch}"
+  target="$(snapjaw_instance_name_to_target "$instance_name")"
+
+  snapjaw_ensure_instance_name "$instance_name" || return 1
+  vmangos_persist_source_pin "$target" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "$branch" || return 1
+  EXPANSION="$target"
+  auto_detect_stack
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+
+  if [[ -n "$attach_ctid" ]]; then
+    pct set "$attach_ctid" -hostname "$(vmangos_target_display "$EXPANSION")" || {
+      echo "Failed to set CTID ${attach_ctid} hostname."
+      read -p "Press Enter to continue..." _
+      return 1
+    }
+    GAME_CTID="$attach_ctid"
+    GAME_CTIDS[$EXPANSION]="$attach_ctid"
+  fi
+
+  echo
+  echo "Selected $(expansion_title "$EXPANSION")"
+  echo "  Container: $(vmangos_target_display "$EXPANSION")"
+  if [[ -n "${GAME_CTID:-}" ]]; then
+    echo "  CTID: ${GAME_CTID}"
+  fi
+  echo "  Repo: ${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+  echo "  Branch: $(expansion_branch "$EXPANSION")"
+  derive_db_names || return 1
+  echo "  DBs: ${WORLD_DB}, ${CHAR_DB_NAME}, ${LOG_DB_NAME}, ${REALM_DB_NAME}"
+  echo
+  if [[ -n "$attach_ctid" ]]; then
+    echo "Attached CTID ${attach_ctid} to $(vmangos_target_display "$EXPANSION")."
+    read -p "Press Enter to continue..." _
+  else
+    read -p "Create this container now? [y/N]: " create_now
+    if [[ "${create_now:-}" =~ ^[Yy]$ ]]; then
+    snapjaw_install_or_attach
+    fi
+  fi
+}
+
+snapjaw_select_instance_menu() {
+  while true; do
+    snapjaw_prepare_target || return 1
+    print_banner
+    echo
+    echo "Select SnapJaw Instance"
+    echo
+
+    local options=()
+    local target ctid status i
+    while IFS= read -r target; do
+      [[ -n "$target" ]] && options+=("$target")
+    done < <(vmangos_target_list)
+
+    for i in "${!options[@]}"; do
+      target="${options[$i]}"
+      ctid="${GAME_CTIDS[$target]:-}"
+      status=$([[ -n "$ctid" ]] && echo "Installed - CTID $ctid" || echo "Not Installed")
+      echo "$((i+1)) - $(expansion_title "$target")"
+      echo "       [Container: $(vmangos_target_display "$target")]"
+      echo "       [Branch: $(expansion_branch "$target")]"
+      echo "       [$status]"
+      echo
+    done
+
+    echo "N - New instance"
+    echo "0 - Back"
+    echo
+    read -p "Selection: " sel
+    sel="${sel:-}"
+
+    [[ "$sel" == "0" ]] && return 1
+    if [[ "$sel" =~ ^[Nn]$ ]]; then
+      snapjaw_create_instance_menu
+      return 0
+    fi
+
+    [[ "$sel" =~ ^[0-9]+$ ]] || continue
+    local index=$((sel-1))
+    if [[ $index -ge 0 && $index -lt ${#options[@]} ]]; then
+      EXPANSION="${options[$index]}"
+      GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+      return 0
+    fi
+  done
+}
+
 snapjaw_service_menu() {
   while true; do
     snapjaw_prepare_target || {
@@ -7176,6 +7445,11 @@ snapjaw_service_menu() {
     else
       echo "Container: $(vmangos_target_display "$EXPANSION") [Not Installed]"
     fi
+    echo "Instance:  $(expansion_title "$EXPANSION")"
+    echo "Branch:    $(expansion_branch "$EXPANSION")"
+    if derive_db_names; then
+      echo "DBs:       ${WORLD_DB}, ${CHAR_DB_NAME}, ${LOG_DB_NAME}, ${REALM_DB_NAME}"
+    fi
     echo
     echo "1 - Stack Control"
     echo "2 - Maintenance"
@@ -7184,7 +7458,9 @@ snapjaw_service_menu() {
     echo "5 - Autostart Status: (${ASV})"
     echo "6 - Server Info"
     echo
-    echo "I - Install or Attach Turtle Container"
+    echo "S - Select Instance"
+    echo "N - New Instance"
+    echo "I - Install or Attach Selected Container"
     echo "0 - Exit"
     echo
 
@@ -7198,6 +7474,8 @@ snapjaw_service_menu() {
       4) ensure_service_target_context && live_logs ;;
       5) ensure_service_target_context && toggle_autostart ;;
       6) ensure_service_target_context && server_info_menu ;;
+      S|s) snapjaw_select_instance_menu ;;
+      N|n) snapjaw_create_instance_menu ;;
       I|i) snapjaw_install_or_attach ;;
       0) exit_launcher_cleanly ;;
     esac
