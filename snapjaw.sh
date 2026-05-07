@@ -2,13 +2,13 @@
 set -euo pipefail
 DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_LAUNCHER_VERSION="22"
+DEFAULT_LAUNCHER_VERSION="snapjaw-1"
 DEFAULT_CRASH_SHARE_ROOT="/mnt/fast/crashlogs"
 DEFAULT_CMANGOS_STANDARD_REPO_URL="https://github.com/cmangos/mangos-classic.git"
 DEFAULT_CMANGOS_STANDARD_GIT_BRANCH="master"
 DEFAULT_CMANGOS_REPO_URL="https://github.com/japtenks/mangos-classic.git"
 DEFAULT_CMANGOS_GIT_BRANCH="ike3-bots"
-DEFAULT_TORTOISE_REPO_URL="ssh://git@192.168.1.41:2222/japtenks/tortoise-wow.git"
+DEFAULT_TORTOISE_REPO_URL="https://github.com/japtenks/tortoise-wow.git"
 DEFAULT_TORTOISE_GIT_BRANCH="main"
 DEFAULT_VMANGOS_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
 DEFAULT_VMANGOS_GIT_BRANCH="codex/ahbot-next"
@@ -20,8 +20,8 @@ DEFAULT_VMANGOS_AHBOT_BRANCH="$DEFAULT_VMANGOS_GIT_BRANCH"
 # -------------------------
 # First Run Bootstrap
 # -------------------------
-CONFIG_FILE_PLAIN="${SCRIPT_DIR}/config.env"
-CONFIG_FILE_ENC="${SCRIPT_DIR}/config.env.enc"
+CONFIG_FILE_PLAIN="${SCRIPT_DIR}/snapjaw.env"
+CONFIG_FILE_ENC="${SCRIPT_DIR}/snapjaw.env.enc"
 CONFIG_FILE="$CONFIG_FILE_PLAIN"
 CONFIG_RUNTIME_FILE=""
 CONFIG_STORAGE_MODE="plain"
@@ -164,7 +164,7 @@ normalize_config_env() {
   [[ -f "$CONFIG_FILE" ]] || return 0
 
   # Canonical install-path ordering is owned by the launcher and must survive old configs.
-  set_or_append_config_line "ALLOWED_EXPANSIONS" '("classic" "tbc" "wotlk" "vmangos")'
+  set_or_append_config_line "ALLOWED_EXPANSIONS" '("vmangos-tortoise")'
   set_or_append_config_line "LAUNCHER_VERSION" "\"${DEFAULT_LAUNCHER_VERSION}\""
   append_config_default_line "CONFIG_ENV_ENCRYPTION" '"0"'
   append_config_default_line "LAUNCHER_AUTO_UPDATE_ON_START" '"0"'
@@ -187,7 +187,7 @@ normalize_config_env() {
   append_config_default_line "TBC_INSTANCE_NAMES" '("main")'
   append_config_default_line "TORTOISE_REPO_URL" "\"${DEFAULT_TORTOISE_REPO_URL}\""
   append_config_default_line "TORTOISE_GIT_BRANCH" "\"${DEFAULT_TORTOISE_GIT_BRANCH}\""
-  append_config_default_line "VMANGOS_INSTANCE_NAMES" '("main" "ahbot")'
+  set_or_append_config_line "VMANGOS_INSTANCE_NAMES" '("tortoise")'
   append_config_default_line "IP_VMANGOS" '""'
   append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
   append_config_default_line "VMANGOS_GIT_BRANCH" "\"${DEFAULT_VMANGOS_BRIDGE_BRANCH}\""
@@ -302,6 +302,12 @@ refresh_website_git_tracking() {
 
 update_launcher_self() {
   local mode="${1:-manual}"
+  echo
+  echo "SnapJaw self-update is intentionally disabled in this standalone launcher."
+  echo "Update snapjaw.sh separately from Launcher.sh."
+  [[ "$mode" == "manual" ]] && read -p "Press Enter to continue..." _
+  return 0
+
   local upstream_ref=""
   echo
   echo "Updating launcher from git..."
@@ -343,11 +349,11 @@ update_launcher_self() {
     }
   fi
 
-  chmod +x "$SCRIPT_DIR/Launcher.sh" 2>/dev/null || true
+  chmod +x "$SCRIPT_DIR/snapjaw.sh" 2>/dev/null || true
 
   normalize_config_env
   source "$CONFIG_FILE"
-  ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
+  ALLOWED_EXPANSIONS=("vmangos-tortoise")
   LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
   LAUNCHER_GIT_BRANCH="${LAUNCHER_GIT_BRANCH:-unknown}"
   LAUNCHER_GIT_COMMIT="${LAUNCHER_GIT_COMMIT:-unknown}"
@@ -358,7 +364,7 @@ update_launcher_self() {
   echo "Reloading launcher..."
   sleep 1
 
-  exec bash "$SCRIPT_DIR/Launcher.sh"
+  exec bash "$SCRIPT_DIR/snapjaw.sh"
 }
 
 refresh_website_remote_git_tracking() {
@@ -564,7 +570,7 @@ if [[ ! -f $CONFIG_FILE ]]; then
 
   # ---- Write full base config ----
   cat <<EOF > "$CONFIG_FILE"
-ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
+ALLOWED_EXPANSIONS=("vmangos-tortoise")
 INSTALLED_EXPANSIONS=()
 LAUNCHER_VERSION="$DEFAULT_LAUNCHER_VERSION"
 CONFIG_ENV_ENCRYPTION="0"
@@ -611,6 +617,7 @@ IP_CLASSIC="$IP_CLASSIC"
 IP_TBC="$IP_TBC"
 IP_WOTLK="$IP_WOTLK"
 IP_VMANGOS="$IP_VMANGOS"
+VMANGOS_INSTANCE_NAMES=("tortoise")
 VMANGOS_WORLD_DB_URL="${VMANGOS_WORLD_DB_URL:-https://github.com/brotalnia/database/raw/master/world_full_14_june_2021.7z}"
 VMANGOS_DATA_PACK_URL="${VMANGOS_DATA_PACK_URL:-https://github.com/japtenks/spp-cmangos-prox/releases/download/assets/vmangos-bropack-v25.zip}"
 CMANGOS_BUILD_PROFILE="${CMANGOS_BUILD_PROFILE:-repo}"
@@ -675,7 +682,7 @@ MODULE_TRAININGDUMMIES=ON
 MODULE_VOICEOVER=ON
 MODULE_EXTRACOMMANDS=ON
 EOF
-  echo "config.env created."
+  echo "snapjaw.env created."
 fi
 
 normalize_config_env
@@ -687,7 +694,8 @@ fi
 persist_config_storage
 
 # Keep install-path ordering canonical even if an older config.env exists.
-ALLOWED_EXPANSIONS=("classic" "tbc" "wotlk" "vmangos")
+ALLOWED_EXPANSIONS=("vmangos-tortoise")
+VMANGOS_INSTANCE_NAMES=("tortoise")
 LAUNCHER_VERSION="${LAUNCHER_VERSION:-$DEFAULT_LAUNCHER_VERSION}"
 CONFIG_ENV_ENCRYPTION="${CONFIG_ENV_ENCRYPTION:-0}"
 LAUNCHER_AUTO_UPDATE_ON_START="${LAUNCHER_AUTO_UPDATE_ON_START:-0}"
@@ -2455,29 +2463,6 @@ bootstrap_new_install_path() {
   create_game_container_interactive || return 1
 }
 
-register_new_tortoise_instance() {
-  local new_instance_name
-  local new_target
-
-  echo
-  echo "Enter a new Turtle/Tortoise instance name. Example: tortoise2 or turtle-test."
-  read -p "Instance name: " new_instance_name
-  new_target=$(vmangos_register_instance_name "$new_instance_name") || {
-    echo "Unable to register that Turtle/Tortoise instance name."
-    read -p "Press Enter to continue..." _
-    return 1
-  }
-
-  EXPANSION="$new_target"
-  vmangos_persist_source_pin "$EXPANSION" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" || {
-    echo "Unable to pin the default tortoise source."
-    read -p "Press Enter to continue..." _
-    return 1
-  }
-
-  return 0
-}
-
 install_new_vmangos_menu() {
   while true; do
     clear
@@ -2520,7 +2505,6 @@ install_new_vmangos_menu() {
     done
 
     echo "N - New vMaNGOS instance"
-    echo "T - New Tortoise/Turtle instance"
     echo "0 - Back"
     echo
     read -p "Selection: " VMNEWSEL
@@ -2539,11 +2523,6 @@ install_new_vmangos_menu() {
       }
       EXPANSION="$new_target"
       return 0
-    fi
-
-    if [[ "$VMNEWSEL" =~ ^[Tt]$ ]]; then
-      register_new_tortoise_instance && return 0
-      continue
     fi
 
     [[ "$VMNEWSEL" =~ ^[0-9]+$ ]] || continue
@@ -7128,6 +7107,110 @@ cleanup_local_crash_artifacts() {
     echo "No unverified local crash bundles were retained."
   fi
   read -p "Press Enter..." _
+}
+
+# -------------------------
+# SnapJaw Standalone Surface
+# -------------------------
+
+snapjaw_target() {
+  printf '%s' "vmangos-tortoise"
+}
+
+snapjaw_prepare_target() {
+  VMANGOS_INSTANCE_NAMES=("tortoise")
+  set_or_append_config_line "ALLOWED_EXPANSIONS" '("vmangos-tortoise")'
+  set_or_append_config_line "VMANGOS_INSTANCE_NAMES" '("tortoise")'
+  vmangos_persist_source_pin "$(snapjaw_target)" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" || return 1
+  EXPANSION="$(snapjaw_target)"
+  auto_detect_stack
+  GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
+}
+
+print_banner() {
+  local CLEAR="\e[0m"
+  local COLOR="\e[32m"
+  clear
+  echo -e "$COLOR"
+  echo "########################################"
+  echo "# SnapJaw - Launcher"
+  echo "# Turtle WoW"
+  echo "########################################"
+  cat <<'__SNAPJAW_LOGO__'
+   _____                    __
+  / ___/____  ____ _____   / /___ __      __
+  \__ \/ __ \/ __ `/ __ \ / / __ `/ | /| / /
+ ___/ / / / / /_/ / /_/ // / /_/ /| |/ |/ /
+/____/_/ /_/\__,_/ .___//_/\__,_/ |__/|__/
+                /_/
+__SNAPJAW_LOGO__
+  echo "Target: vmangos-tortoise"
+  echo "Repo:   ${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}"
+  echo "Branch: ${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}"
+  echo -e "$CLEAR"
+}
+
+snapjaw_install_or_attach() {
+  snapjaw_prepare_target || return 1
+  if [[ -n "${GAME_CTID:-}" ]]; then
+    echo "SnapJaw Turtle container already detected: CTID ${GAME_CTID}."
+    read -p "Press Enter to continue..." _
+    return 0
+  fi
+
+  bootstrap_new_install_path || return 1
+}
+
+snapjaw_service_menu() {
+  while true; do
+    snapjaw_prepare_target || {
+      echo "Unable to prepare the SnapJaw Turtle target."
+      read -p "Press Enter to retry..." _
+      continue
+    }
+
+    print_banner
+    echo
+    if [[ -n "${GAME_CTID:-}" ]]; then
+      echo "Container: $(vmangos_target_display "$EXPANSION") [CTID ${GAME_CTID}]"
+    else
+      echo "Container: $(vmangos_target_display "$EXPANSION") [Not Installed]"
+    fi
+    echo
+    echo "1 - Stack Control"
+    echo "2 - Maintenance"
+    echo "3 - Remote Console"
+    echo "4 - Live World Log"
+    echo "5 - Autostart Status: (${ASV})"
+    echo "6 - Server Info"
+    echo
+    echo "I - Install or Attach Turtle Container"
+    echo "0 - Exit"
+    echo
+
+    read -p "Selection: " MAIN
+    MAIN="${MAIN:-}"
+
+    case "$MAIN" in
+      1) ensure_service_target_context && stack_control_menu ;;
+      2) ensure_expansion_context && maintenance_menu ;;
+      3) ensure_service_target_context && connect_ra ;;
+      4) ensure_service_target_context && live_logs ;;
+      5) ensure_service_target_context && toggle_autostart ;;
+      6) ensure_service_target_context && server_info_menu ;;
+      I|i) snapjaw_install_or_attach ;;
+      0) exit_launcher_cleanly ;;
+    esac
+  done
+}
+
+main() {
+  snapjaw_prepare_target || exit 1
+  snapjaw_service_menu
+}
+
+run_startup_auto_update_if_needed() {
+  LAUNCHER_AUTO_UPDATE_ON_START="0"
 }
 #program starts here
 run_startup_auto_update_if_needed
