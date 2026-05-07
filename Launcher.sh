@@ -2455,6 +2455,29 @@ bootstrap_new_install_path() {
   create_game_container_interactive || return 1
 }
 
+register_new_tortoise_instance() {
+  local new_instance_name
+  local new_target
+
+  echo
+  echo "Enter a new Turtle/Tortoise instance name. Example: tortoise2 or turtle-test."
+  read -p "Instance name: " new_instance_name
+  new_target=$(vmangos_register_instance_name "$new_instance_name") || {
+    echo "Unable to register that Turtle/Tortoise instance name."
+    read -p "Press Enter to continue..." _
+    return 1
+  }
+
+  EXPANSION="$new_target"
+  vmangos_persist_source_pin "$EXPANSION" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "${TORTOISE_GIT_BRANCH:-$DEFAULT_TORTOISE_GIT_BRANCH}" || {
+    echo "Unable to pin the default tortoise source."
+    read -p "Press Enter to continue..." _
+    return 1
+  }
+
+  return 0
+}
+
 install_new_vmangos_menu() {
   while true; do
     clear
@@ -2497,6 +2520,7 @@ install_new_vmangos_menu() {
     done
 
     echo "N - New vMaNGOS instance"
+    echo "T - New Tortoise/Turtle instance"
     echo "0 - Back"
     echo
     read -p "Selection: " VMNEWSEL
@@ -2515,6 +2539,11 @@ install_new_vmangos_menu() {
       }
       EXPANSION="$new_target"
       return 0
+    fi
+
+    if [[ "$VMNEWSEL" =~ ^[Tt]$ ]]; then
+      register_new_tortoise_instance && return 0
+      continue
     fi
 
     [[ "$VMNEWSEL" =~ ^[0-9]+$ ]] || continue
