@@ -147,57 +147,6 @@ persist_config_storage() {
 
 trap cleanup_runtime_config EXIT
 
-normalize_config_env() {
-  [[ -f "$CONFIG_FILE" ]] || return 0
-
-  # Canonical install-path ordering is owned by the launcher and must survive old configs.
-  set_or_append_config_line "ALLOWED_EXPANSIONS" '("vmangos-tortoise")'
-  set_or_append_config_line "LAUNCHER_VERSION" "\"${DEFAULT_LAUNCHER_VERSION}\""
-  append_config_default_line "CONFIG_ENV_ENCRYPTION" '"0"'
-  append_config_default_line "LAUNCHER_AUTO_UPDATE_ON_START" '"0"'
-  append_config_default_line "LAUNCHER_GIT_BRANCH" '"unknown"'
-  append_config_default_line "LAUNCHER_GIT_COMMIT" '"unknown"'
-  append_config_default_line "WEBSITE_GIT_BRANCH" '"unknown"'
-  append_config_default_line "WEBSITE_GIT_COMMIT" '"unknown"'
-  append_config_default_line "WEBSITE_GIT_DATE" '"unknown"'
-  append_config_default_line "WEBSITE_REMOTE_GIT_BRANCH" '"unknown"'
-  append_config_default_line "WEBSITE_REMOTE_GIT_COMMIT" '"unknown"'
-  append_config_default_line "WEBSITE_REMOTE_GIT_DATE" '"unknown"'
-  append_config_default_line "WEBSITE_GIT_OUTDATED" '"0"'
-
-  append_config_default_line "CMANGOS_BUILD_PROFILE" '"repo"'
-  append_config_default_line "CMANGOS_STANDARD_REPO_URL" "\"${DEFAULT_CMANGOS_STANDARD_REPO_URL}\""
-  append_config_default_line "CMANGOS_STANDARD_GIT_BRANCH" "\"${DEFAULT_CMANGOS_STANDARD_GIT_BRANCH}\""
-  append_config_default_line "CMANGOS_REPO_URL" "\"${DEFAULT_CMANGOS_REPO_URL}\""
-  append_config_default_line "CMANGOS_GIT_BRANCH" "\"${DEFAULT_CMANGOS_GIT_BRANCH}\""
-  append_config_default_line "CLASSIC_INSTANCE_NAMES" '("main")'
-  append_config_default_line "TBC_INSTANCE_NAMES" '("main")'
-  append_config_default_line "TORTOISE_REPO_URL" "\"${DEFAULT_TORTOISE_REPO_URL}\""
-  append_config_default_line "TORTOISE_GIT_BRANCH" "\"${DEFAULT_TORTOISE_GIT_BRANCH}\""
-  append_config_default_line "VMANGOS_INSTANCE_NAMES" '("tortoise" "tortoise-ptr" "tortoise-test" "tortoise-beta")'
-  append_config_default_line "IP_VMANGOS" '""'
-  append_config_default_line "VMANGOS_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
-  append_config_default_line "VMANGOS_GIT_BRANCH" "\"${DEFAULT_VMANGOS_BRIDGE_BRANCH}\""
-  append_config_default_line "VMANGOS_MAIN_REPO_URL" "\"${DEFAULT_VMANGOS_BRIDGE_REPO_URL}\""
-  append_config_default_line "VMANGOS_MAIN_GIT_BRANCH" "\"${DEFAULT_VMANGOS_BRIDGE_BRANCH}\""
-  append_config_default_line "VMANGOS_AHBOT_REPO_URL" "\"${DEFAULT_VMANGOS_AHBOT_REPO_URL}\""
-  append_config_default_line "VMANGOS_AHBOT_GIT_BRANCH" "\"${DEFAULT_VMANGOS_AHBOT_BRANCH}\""
-  append_config_default_line "VMANGOS_DB_HOST" '""'
-  append_config_default_line "VMANGOS_DB_PORT" '"3306"'
-  append_config_default_line "VMANGOS_WORLD_DB_URL" '"https://github.com/brotalnia/database/raw/master/world_full_14_june_2021.7z"'
-  append_config_default_line "VMANGOS_DATA_PACK_URL" '"https://github.com/japtenks/spp-cmangos-prox/releases/download/assets/vmangos-bropack-v25.zip"'
-  append_config_default_line "CRASH_SHARE_ROOT" "\"${DEFAULT_CRASH_SHARE_ROOT}\""
-  append_config_default_line "VMANGOS_CORE_VERSION" '1'
-  append_config_default_line "VMANGOS_WORLD_VERSION" '1'
-  append_config_default_line "VMANGOS_CHARS_VERSION" '1'
-  append_config_default_line "VMANGOS_REALM_VERSION" '1'
-  append_config_default_line "VMANGOS_LOGS_VERSION" '1'
-  append_config_default_line "VMANGOS_BOTS_VERSION" '1'
-  append_config_default_line "VMANGOS_WEBSITE_VERSION" '0'
-  append_config_default_line "VMANGOS_MAPS_VERSION" '1'
-  append_config_default_line "MASTER_EXPANSION" '""'
-  append_config_default_line "MASTER_REALMD_DB" '""'
-  append_config_default_line "VMANGOS_SHARED_REALMD" '"0"'
 }
 
 persist_launcher_auto_update_flag() {
