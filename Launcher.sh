@@ -2443,6 +2443,18 @@ install_new_cmangos_menu() {
   done
 }
 
+bootstrap_new_install_path() {
+  ensure_expansion_context || return 1
+
+  if is_vmangos; then
+    ensure_shared_stack 0 || return 1
+  else
+    ensure_shared_stack 1 || return 1
+  fi
+
+  create_game_container_interactive || return 1
+}
+
 install_new_vmangos_menu() {
   while true; do
     clear
@@ -2457,24 +2469,27 @@ install_new_vmangos_menu() {
     local target
     while IFS= read -r target; do
       [[ -n "$target" ]] || continue
+      [[ "$target" == "vmangos-tortoise" ]] && continue
       if [[ -z "${GAME_CTIDS[$target]:-}" ]]; then
         options+=("$target")
       fi
     done < <(vmangos_target_list)
-    options+=("tortoise")
+    if [[ -z "${GAME_CTIDS[vmangos-tortoise]:-}" ]]; then
+      options+=("tortoise")
+    fi
 
     local i opt title
     for i in "${!options[@]}"; do
       opt="${options[$i]}"
       if [[ "$opt" == "tortoise" ]]; then
-        title="Tortoise/Turtle WoW [Experimental - installer TBD]"
+        title="Tortoise/Turtle WoW [Experimental]"
       else
         title="$(expansion_title "$opt")"
       fi
       echo "$((i+1)) - $title"
       echo "       [Install Path: $opt]"
       if [[ "$opt" == "tortoise" ]]; then
-        echo "       [Not Installed - DB/data flow unproven]"
+        echo "       [Not Installed]"
       else
         echo "       [Not Installed]"
       fi
@@ -2545,15 +2560,13 @@ install_new_menu() {
     case "$FAMILY_SEL" in
       1)
         if install_new_cmangos_menu; then
-          ensure_expansion_context || continue
-          ensure_game_container || continue
+          bootstrap_new_install_path || continue
           return
         fi
         ;;
       2)
         if install_new_vmangos_menu; then
-          ensure_expansion_context || continue
-          ensure_game_container || continue
+          bootstrap_new_install_path || continue
           return
         fi
         ;;
