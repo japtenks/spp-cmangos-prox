@@ -2223,7 +2223,13 @@ create_game_container_interactive() {
   pct list
   echo
 
-  read -p "Enter new CTID for $(vmangos_target_display "$EXPANSION"): " NEW_CTID
+  if [[ -n "${VMANGOS_ATTACH_NEW_CTID:-}" ]]; then
+    NEW_CTID="$VMANGOS_ATTACH_NEW_CTID"
+    VMANGOS_ATTACH_NEW_CTID=""
+    echo "Using requested CTID ${NEW_CTID} for $(vmangos_target_display "$EXPANSION")."
+  else
+    read -p "Enter new CTID for $(vmangos_target_display "$EXPANSION"): " NEW_CTID
+  fi
   [[ "$NEW_CTID" =~ ^[0-9]+$ ]] || {
     echo "Invalid CTID."
     return 1
@@ -2254,7 +2260,13 @@ ensure_game_container() {
   pct list
   echo
 
-  read -p "Enter CTID for $(vmangos_target_display "$EXPANSION"): " NEW_CTID
+  if [[ -n "${VMANGOS_ATTACH_NEW_CTID:-}" ]]; then
+    NEW_CTID="$VMANGOS_ATTACH_NEW_CTID"
+    VMANGOS_ATTACH_NEW_CTID=""
+    echo "Using requested CTID ${NEW_CTID} for $(vmangos_target_display "$EXPANSION")."
+  else
+    read -p "Enter CTID for $(vmangos_target_display "$EXPANSION"): " NEW_CTID
+  fi
   [[ ! "$NEW_CTID" =~ ^[0-9]+$ ]] && return 1
 
   create_container "$(vmangos_target_hostname "$EXPANSION")" "game" "$NEW_CTID" 4
@@ -7321,6 +7333,19 @@ snapjaw_create_instance_menu() {
     read -p "Press Enter to continue..." _
     return 1
   fi
+  if [[ -n "$attach_ctid" ]] && ! pct config "$attach_ctid" >/dev/null 2>&1; then
+    echo "CTID ${attach_ctid} does not exist yet."
+    read -p "Create a new LXC with CTID ${attach_ctid}? [y/N]: " create_missing_ctid
+    if [[ "${create_missing_ctid:-}" =~ ^[Yy]$ ]]; then
+      VMANGOS_ATTACH_NEW_CTID="$attach_ctid"
+      attach_ctid=""
+    else
+      read -p "Press Enter to continue..." _
+      return 1
+    fi
+  else
+    VMANGOS_ATTACH_NEW_CTID=""
+  fi
 
   echo
   read -p "Instance name (example: stable, ptr, beta, test, myrealm): " instance_name
@@ -7375,6 +7400,8 @@ snapjaw_create_instance_menu() {
   if [[ -n "$attach_ctid" ]]; then
     echo "Attached CTID ${attach_ctid} to $(vmangos_target_display "$EXPANSION")."
     read -p "Press Enter to continue..." _
+  elif [[ -n "${VMANGOS_ATTACH_NEW_CTID:-}" ]]; then
+    snapjaw_install_or_attach
   else
     read -p "Create this container now? [y/N]: " create_now
     if [[ "${create_now:-}" =~ ^[Yy]$ ]]; then
