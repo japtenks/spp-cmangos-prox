@@ -8,7 +8,7 @@ DEFAULT_CMANGOS_STANDARD_REPO_URL="https://github.com/cmangos/mangos-classic.git
 DEFAULT_CMANGOS_STANDARD_GIT_BRANCH="master"
 DEFAULT_CMANGOS_REPO_URL="https://github.com/japtenks/mangos-classic.git"
 DEFAULT_CMANGOS_GIT_BRANCH="ike3-bots"
-DEFAULT_TORTOISE_REPO_URL="ssh://git@192.168.1.41:2222/japtenks/tortoise-wow.git"
+DEFAULT_TORTOISE_REPO_URL="https://github.com/japtenks/tortoise-wow.git"
 DEFAULT_TORTOISE_GIT_BRANCH="main"
 DEFAULT_VMANGOS_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
 DEFAULT_VMANGOS_GIT_BRANCH="codex/ahbot-next"
@@ -4305,7 +4305,7 @@ apply_tortoise_cmake_compat_patch() {
 
     perl -0pi -e 's/strcmp\\(oldEmail, newEmail\\) == NULL/strcmp(oldEmail, newEmail) == 0/g; s/strcmp\\(newEmail, newEmail2\\) != NULL/strcmp(newEmail, newEmail2) != 0/g' src/game/Commands/Commands.cpp
     perl -0pi -e 's/teamIndex == TEAM_ALLIANCE/teamIndex == BG_TEAM_ALLIANCE/g' src/game/Battlegrounds/BattleGroundSV.cpp
-    perl -0pi -e 's/GB = MB \\* 1000/GB = MB * 1000LL/g; s/ftell\\(pFile\\) > 50 \\* GB/ftell(pFile) > 50LL * GB/g' src/shared/Log.cpp
+    perl -0pi -e 's/GB = MB \\* 1000L*/GB = MB * 1000LL/g; s/ftell\\(pFile\\) > 50L* \\* GB/ftell(pFile) > 50LL * GB/g' src/shared/Log.cpp
 
     echo 'Applied Tortoise source compatibility and warning cleanup patch set.'
   "

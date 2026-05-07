@@ -1828,11 +1828,10 @@ install_tortoise_databases() {
       DROP DATABASE IF EXISTS ${WORLD_DB};
       DROP DATABASE IF EXISTS ${CHAR_DB_NAME};
       DROP DATABASE IF EXISTS ${LOG_DB_NAME};
-      DROP DATABASE IF EXISTS ${REALM_DB_NAME};
       CREATE DATABASE ${WORLD_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
       CREATE DATABASE ${CHAR_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
       CREATE DATABASE ${LOG_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-      CREATE DATABASE ${REALM_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+      CREATE DATABASE IF NOT EXISTS ${REALM_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
       CREATE USER IF NOT EXISTS '${DB_LAN_USER}'@'${DB_LAN_HOST}' IDENTIFIED BY '${DB_LAN_PASS}';
       GRANT ALL PRIVILEGES ON ${WORLD_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
       GRANT ALL PRIVILEGES ON ${CHAR_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
@@ -2165,6 +2164,7 @@ ensure_shared_stack() {
 
   auto_detect_stack
   local REQUIRE_LOGIN="${1:-auto}"
+  local REQUIRE_WEB="1"
   if [[ "$REQUIRE_LOGIN" == "auto" ]]; then
     if is_vmangos; then
       REQUIRE_LOGIN="0"
@@ -2172,8 +2172,11 @@ ensure_shared_stack() {
       REQUIRE_LOGIN="1"
     fi
   fi
+  if is_vmangos; then
+    REQUIRE_WEB="0"
+  fi
 
-  if [[ -n "$DB_CTID" && -n "$WEB_CTID" ]]; then
+  if [[ -n "$DB_CTID" && ( "$REQUIRE_WEB" != "1" || -n "$WEB_CTID" ) ]]; then
     if [[ "$REQUIRE_LOGIN" != "1" || -n "$LOGIN_CTID" ]]; then
       return
     fi
@@ -2189,7 +2192,7 @@ ensure_shared_stack() {
     create_container "spp-db" "mariadb" "$DB_NEW" 1
   fi
 
-  if [[ -z "$WEB_CTID" ]]; then
+  if [[ "$REQUIRE_WEB" == "1" && -z "$WEB_CTID" ]]; then
     read -p "Enter CTID for spp-web: " WEB_NEW
     create_container "spp-web" "website" "$WEB_NEW" 2
   fi
@@ -2200,8 +2203,12 @@ ensure_shared_stack() {
   fi
 
   auto_detect_stack
-  if [[ -z "$DB_CTID" || -z "$WEB_CTID" ]]; then
-    echo "Shared DB/web services are still incomplete."
+  if [[ -z "$DB_CTID" ]]; then
+    echo "Shared DB service is still incomplete."
+    return 1
+  fi
+  if [[ "$REQUIRE_WEB" == "1" && -z "$WEB_CTID" ]]; then
+    echo "Shared web service is still incomplete."
     return 1
   fi
   if [[ "$REQUIRE_LOGIN" == "1" && -z "$LOGIN_CTID" ]]; then
@@ -7216,7 +7223,7 @@ expansion_realm_db_name() {
   case "$1" in
     vmangos|vmangos-*)
       if vmangos_is_tortoise_target "$1"; then
-        echo "$(snapjaw_db_token "$1")realmd"
+        echo "snapjawrealmd"
       else
         echo "$(vmangos_db_token "$1")realmd"
       fi
@@ -7251,7 +7258,11 @@ derive_db_names() {
   EXPANSION_TITLE=$(expansion_title "$EXPANSION")
 
   if is_vmangos; then
-    REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
+    if vmangos_is_tortoise_target "$EXPANSION"; then
+      REALM_DB_NAME="snapjawrealmd"
+    else
+      REALM_DB_NAME=$(expansion_realm_db_name "$EXPANSION") || return 1
+    fi
   elif [[ -n "${MASTER_REALMD_DB:-}" ]]; then
     REALM_DB_NAME="$MASTER_REALMD_DB"
   else
