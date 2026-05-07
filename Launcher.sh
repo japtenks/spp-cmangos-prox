@@ -957,6 +957,10 @@ vmangos_config_token() {
 vmangos_db_token() {
   local suffix
   suffix=$(vmangos_target_suffix "${1:-$EXPANSION}")
+  if [[ "$suffix" == "tortoise" ]]; then
+    printf 'tortoise'
+    return 0
+  fi
   if [[ "$suffix" == "main" ]]; then
     printf 'vmangos'
     return 0
@@ -1133,7 +1137,13 @@ expansion_branch() {
 expansion_realm_db_name() {
   case "$1" in
     classic|classic-*|tbc|tbc-*|wotlk) echo "$(cmangos_db_token "$1")realmd" ;;
-    vmangos|vmangos-*) echo "$(vmangos_db_token "$1")realmd" ;;
+    vmangos|vmangos-*)
+      if vmangos_is_tortoise_target "$1"; then
+        echo "tortoiserealmd"
+      else
+        echo "$(vmangos_db_token "$1")realmd"
+      fi
+      ;;
     *) return 1 ;;
   esac
 }
@@ -1554,7 +1564,14 @@ derive_db_names() {
     classic) DB_KEY="classic"; MAP_KEY="vanilla" ;;
     tbc)     DB_KEY="tbc";     MAP_KEY="tbc" ;;
     wotlk)   DB_KEY="wotlk";   MAP_KEY="wotlk" ;;
-    vmangos|vmangos-*) DB_KEY="$(vmangos_db_token "$EXPANSION")"; MAP_KEY="vmangos" ;;
+    vmangos|vmangos-*)
+      if vmangos_is_tortoise_target "$EXPANSION"; then
+        DB_KEY="tortoise"
+      else
+        DB_KEY="$(vmangos_db_token "$EXPANSION")"
+      fi
+      MAP_KEY="vmangos"
+      ;;
     *) echo "Unknown expansion: $EXPANSION"; return 1 ;;
   esac
 
@@ -1759,6 +1776,13 @@ create_lan_db_user() {
 
   if is_vmangos; then
     resolve_vmangos_db_endpoint || return 1
+    if vmangos_is_tortoise_target "$EXPANSION"; then
+      pct exec "$DB_CTID" -- bash -c "
+        export MYSQL_PWD='${DB_ROOT_PASS}'
+        mariadb -u root -e \"${GRANTS}\"
+      "
+      return $?
+    fi
     pct exec "$GAME_CTID" -- bash -c "
       export MYSQL_PWD='${DB_ROOT_PASS}'
       mariadb --skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='root' -e \"${GRANTS}\"
@@ -1770,6 +1794,64 @@ create_lan_db_user() {
     export MYSQL_PWD='${DB_ROOT_PASS}'
     mariadb -u root -e \"${GRANTS}\"
   "
+}
+
+tortoise_sync_sql_tree() {
+  derive_db_names || return 1
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -euo pipefail
+    mkdir -p '${INSTALL_DIR}/sql'
+    rsync -a --delete /opt/source/sql/ '${INSTALL_DIR}/sql/'
+    mkdir -p '${INSTALL_DIR}/sql/unused'
+  "
+}
+
+install_tortoise_databases() {
+  derive_db_names || return 1
+  resolve_vmangos_db_endpoint || return 1
+
+  pct exec "$DB_CTID" -- bash -c "
+    set -euo pipefail
+    export MYSQL_PWD='${DB_ROOT_PASS}'
+    mariadb -u root -e \"
+      DROP DATABASE IF EXISTS ${WORLD_DB};
+      DROP DATABASE IF EXISTS ${CHAR_DB_NAME};
+      DROP DATABASE IF EXISTS ${LOG_DB_NAME};
+      DROP DATABASE IF EXISTS ${REALM_DB_NAME};
+      CREATE DATABASE ${WORLD_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+      CREATE DATABASE ${CHAR_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+      CREATE DATABASE ${LOG_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+      CREATE DATABASE ${REALM_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+      CREATE USER IF NOT EXISTS '${DB_LAN_USER}'@'${DB_LAN_HOST}' IDENTIFIED BY '${DB_LAN_PASS}';
+      GRANT ALL PRIVILEGES ON ${WORLD_DB}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+      GRANT ALL PRIVILEGES ON ${CHAR_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+      GRANT ALL PRIVILEGES ON ${LOG_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+      GRANT ALL PRIVILEGES ON ${REALM_DB_NAME}.* TO '${DB_LAN_USER}'@'${DB_LAN_HOST}';
+      FLUSH PRIVILEGES;
+    \"
+  " || return 1
+
+  pct exec "$GAME_CTID" -- bash -c "
+    set -euo pipefail
+    export MYSQL_PWD='${DB_LAN_PASS}'
+    MYSQL_ARGS=(--skip-ssl --host='${DB_IP}' --port='${DB_PORT}' --user='${DB_LAN_USER}')
+    sed \
+      -e 's/\/\*![0-9]\{5\} DEFINER=\`[^`]*\`@\`[^`]*\`\*\///g' \
+      -e 's/\\btw_world\\b/${WORLD_DB}/g' \
+      -e 's/\\btw_char\\b/${CHAR_DB_NAME}/g' \
+      -e 's/\\btw_logs\\b/${LOG_DB_NAME}/g' \
+      -e 's/\\btw_logon\\b/${REALM_DB_NAME}/g' \
+      /opt/source/sql/create_databases.sql | mariadb \"\${MYSQL_ARGS[@]}\"
+
+    for f in /opt/source/sql/base/tw_world_*.sql; do
+      [[ -e \"\$f\" ]] || continue
+      sed 's/\\btw_world\\b/${WORLD_DB}/g' \"\$f\" | mariadb \"\${MYSQL_ARGS[@]}\" '${WORLD_DB}'
+    done
+  " || return 1
+
+  tortoise_sync_sql_tree || return 1
+  fix_realm_entry || return 1
 }
 
 stat_state() {
@@ -3107,9 +3189,15 @@ update_db_conf() {
   if is_vmangos "$TARGET_EXPANSION"; then
     if pct exec "$GAME_CTID" -- test -f "${INSTALL_DIR}/etc/realmd.conf" 2>/dev/null; then
       pct exec "$GAME_CTID" -- bash -c "
-        sed -i \
-        's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
-        ${INSTALL_DIR}/etc/realmd.conf
+        if [[ '${TARGET_EXPANSION}' == 'vmangos-tortoise' ]]; then
+          sed -i \
+          's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+          ${INSTALL_DIR}/etc/realmd.conf
+        else
+          sed -i \
+          's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+          ${INSTALL_DIR}/etc/realmd.conf
+        fi
       "
       echo "$TARGET_EXPANSION realmd.conf updated in game container."
     else
@@ -3166,13 +3254,27 @@ update_db_conf() {
 
     pct exec "$GAME_CTID" -- bash -c "
       if [[ '$EXP' == vmangos* ]]; then
-        sed -i \
-        -e 's|^RealmID *=.*|RealmID = ${REALM_ID}|' \
-        -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
-        -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
-        -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
-        -e 's|^LogsDatabase\.Info *=.*|LogsDatabase.Info               = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
-        ${INSTALL_DIR}/etc/mangosd.conf
+        if [[ '$EXP' == 'vmangos-tortoise' ]]; then
+          sed -i \
+          -e 's|^RealmID *=.*|RealmID = ${REALM_ID}|' \
+          -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+          -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+          -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+          -e 's|^LogsDatabase\.Info *=.*|LogsDatabase.Info               = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+          -e 's|^DataDir *=.*|DataDir = \"/srv/vmangos/turtle-data\"|' \
+          -e 's|^LogsDir *=.*|LogsDir = \"/srv/vmangos/logs/\"|' \
+          -e 's|^Database\.AutoUpdate\.Path *=.*|Database.AutoUpdate.Path = \"/srv/vmangos/sql/\"|' \
+          -e 's|^WorldServerPort *=.*|WorldServerPort = 8085|' \
+          ${INSTALL_DIR}/etc/mangosd.conf
+        else
+          sed -i \
+          -e 's|^RealmID *=.*|RealmID = ${REALM_ID}|' \
+          -e 's|^LoginDatabase\.Info *=.*|LoginDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
+          -e 's|^WorldDatabase\.Info *=.*|WorldDatabase.Info              = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${WORLD_DB}\"|' \
+          -e 's|^CharacterDatabase\.Info *=.*|CharacterDatabase.Info          = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${CHAR_DB_NAME}\"|' \
+          -e 's|^LogsDatabase\.Info *=.*|LogsDatabase.Info               = \"${DB_IP};${DB_PORT};${DB_LAN_USER};${DB_LAN_PASS};${LOG_DB_NAME}\"|' \
+          ${INSTALL_DIR}/etc/mangosd.conf
+        fi
       else
         sed -i \
         -e 's|^LoginDatabaseInfo *=.*|LoginDatabaseInfo     = \"${DB_IP};3306;${DB_LAN_USER};${DB_LAN_PASS};${REALM_DB_NAME}\"|' \
@@ -4284,12 +4386,19 @@ vmangos_configure_build_dir() {
 
     configure_lane() {
       cd /opt/source
-      cmake -S . -B \"\$BUILD_DIR\" \
-        -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-        -DCMAKE_BUILD_TYPE=${build_type} \
-        -DBUILD_EXTRACTORS=${extractors_flag} \
-        -DBUILD_PLAYERBOTS=ON \
-        -DSUPPORTED_CLIENT_BUILD=5875
+      if [[ '${EXPANSION}' == 'vmangos-tortoise' ]]; then
+        cmake -S . -B \"\$BUILD_DIR\" \
+          -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+          -DCMAKE_BUILD_TYPE=${build_type} \
+          -DUSE_EXTRACTORS=ON
+      else
+        cmake -S . -B \"\$BUILD_DIR\" \
+          -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+          -DCMAKE_BUILD_TYPE=${build_type} \
+          -DBUILD_EXTRACTORS=${extractors_flag} \
+          -DBUILD_PLAYERBOTS=ON \
+          -DSUPPORTED_CLIENT_BUILD=5875
+      fi
     }
 
     if [[ '${reconfigure_mode}' == 'fresh' ]]; then
@@ -4919,6 +5028,12 @@ database_menu() {
 
 install_db() {
   derive_db_names || return 1
+  if is_vmangos && vmangos_is_tortoise_target "$EXPANSION"; then
+    echo "Installing Turtle/Tortoise DB bundle..."
+    install_tortoise_databases || return 1
+    echo "DB install complete."
+    return 0
+  fi
   if is_vmangos; then
     echo "Installing full DB with dedicated vMaNGOS realm/logon flow..."
   else
@@ -4941,6 +5056,12 @@ install_db() {
 # Non-master expansions skip realm DB install
 install_db_no_realm() {
   derive_db_names || return 1
+  if is_vmangos && vmangos_is_tortoise_target "$EXPANSION"; then
+    echo "Installing Turtle/Tortoise DB bundle..."
+    install_tortoise_databases || return 1
+    echo "DB install complete."
+    return 0
+  fi
   if is_vmangos && ! vmangos_uses_shared_realmd; then
     echo "vMaNGOS always installs its own dedicated realm DB."
     install_db
@@ -6005,6 +6126,28 @@ install_data() {
   derive_db_names || return 1
 
   if is_vmangos; then
+    if vmangos_is_tortoise_target "$EXPANSION"; then
+      local ASSET_DIR="/opt/spp-assets/tortoise/data"
+
+      pct exec "$GAME_CTID" -- bash -c "
+        set -euo pipefail
+        for required_dir in dbc maps vmaps mmaps; do
+          if [[ ! -d '$ASSET_DIR/'\"\$required_dir\" ]]; then
+            echo \"Missing required Turtle/Tortoise data directory: $ASSET_DIR/\$required_dir\"
+            exit 1
+          fi
+        done
+        mkdir -p '$INSTALL_DIR/turtle-data'
+        rsync -a --delete '$ASSET_DIR/' '$INSTALL_DIR/turtle-data/'
+      "
+
+      local MAP_EXPECTED="${VERSION_MAP[$EXPANSION:MAPS]}"
+      local INSTALL_DATE
+      INSTALL_DATE=$(date +%F_%H:%M)
+      write_version "${EXPANSION}_maps_version.spp" "${MAP_EXPECTED}|${INSTALL_DATE}"
+      return 0
+    fi
+
     local ASSET_DIR="/opt/spp-assets/vmangos/data"
     local DEFAULT_ASSET_URL="${VMANGOS_DATA_PACK_URL}"
 
