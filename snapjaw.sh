@@ -3,19 +3,8 @@ set -euo pipefail
 DRY_RUN=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_LAUNCHER_VERSION="snapjaw-1"
-DEFAULT_CRASH_SHARE_ROOT="/mnt/fast/crashlogs"
-DEFAULT_CMANGOS_STANDARD_REPO_URL="https://github.com/cmangos/mangos-classic.git"
-DEFAULT_CMANGOS_STANDARD_GIT_BRANCH="master"
-DEFAULT_CMANGOS_REPO_URL="https://github.com/japtenks/mangos-classic.git"
-DEFAULT_CMANGOS_GIT_BRANCH="ike3-bots"
 DEFAULT_TORTOISE_REPO_URL="https://github.com/japtenks/tortoise-wow.git"
 DEFAULT_TORTOISE_GIT_BRANCH="main"
-DEFAULT_VMANGOS_REPO_URL="https://github.com/japtenks/SPP-Vmangos-nix.git"
-DEFAULT_VMANGOS_GIT_BRANCH="codex/ahbot-next"
-DEFAULT_VMANGOS_BRIDGE_REPO_URL="$DEFAULT_VMANGOS_REPO_URL"
-DEFAULT_VMANGOS_AHBOT_REPO_URL="$DEFAULT_VMANGOS_REPO_URL"
-DEFAULT_VMANGOS_BRIDGE_BRANCH="$DEFAULT_VMANGOS_GIT_BRANCH"
-DEFAULT_VMANGOS_AHBOT_BRANCH="$DEFAULT_VMANGOS_GIT_BRANCH"
 
 # -------------------------
 # First Run Bootstrap
@@ -28,8 +17,6 @@ CONFIG_STORAGE_MODE="plain"
 CONFIG_ENV_ENCRYPTION="0"
 CONFIG_ENCRYPTION_PASSPHRASE=""
 declare -A GAME_CTIDS
-WEBSITE_REPO="https://github.com/japtenks/SPP-Web.git"
-WEBSITE_SRC_DIR="/opt/SPP-Web"
 
 php_single_quote_escape() {
   local value="${1//\\/\\\\}"
@@ -2242,6 +2229,14 @@ create_game_container_interactive() {
     return 1
   }
 
+  if pct config "$NEW_CTID" >/dev/null 2>&1; then
+    echo "CTID ${NEW_CTID} already exists. Attaching it to $(vmangos_target_display "$EXPANSION")."
+    pct set "$NEW_CTID" -hostname "$(vmangos_target_hostname "$EXPANSION")" || return 1
+    GAME_CTID="$NEW_CTID"
+    GAME_CTIDS[$EXPANSION]="$NEW_CTID"
+    return 0
+  fi
+
   create_container "$(vmangos_target_hostname "$EXPANSION")" "game" "$NEW_CTID" 4
 
   auto_detect_stack
@@ -2275,6 +2270,14 @@ ensure_game_container() {
     read -p "Enter CTID for $(vmangos_target_display "$EXPANSION"): " NEW_CTID
   fi
   [[ ! "$NEW_CTID" =~ ^[0-9]+$ ]] && return 1
+
+  if pct config "$NEW_CTID" >/dev/null 2>&1; then
+    echo "CTID ${NEW_CTID} already exists. Attaching it to $(vmangos_target_display "$EXPANSION")."
+    pct set "$NEW_CTID" -hostname "$(vmangos_target_hostname "$EXPANSION")" || return 1
+    GAME_CTID="$NEW_CTID"
+    GAME_CTIDS[$EXPANSION]="$NEW_CTID"
+    return 0
+  fi
 
   create_container "$(vmangos_target_hostname "$EXPANSION")" "game" "$NEW_CTID" 4
 
@@ -7287,8 +7290,17 @@ snapjaw_prepare_target() {
     esac
     vmangos_persist_source_pin "$target" "${TORTOISE_REPO_URL:-$DEFAULT_TORTOISE_REPO_URL}" "$branch" || return 1
   done < <(vmangos_target_list)
-  EXPANSION="${EXPANSION:-$(snapjaw_target)}"
   auto_detect_stack
+  if [[ -z "${EXPANSION:-}" ]]; then
+    EXPANSION="$(snapjaw_target)"
+    if [[ -z "${GAME_CTIDS[$EXPANSION]:-}" ]]; then
+      while IFS= read -r target; do
+        [[ -n "${GAME_CTIDS[$target]:-}" ]] || continue
+        EXPANSION="$target"
+        break
+      done < <(vmangos_target_list)
+    fi
+  fi
   GAME_CTID="${GAME_CTIDS[$EXPANSION]:-}"
 }
 
