@@ -147,8 +147,6 @@ persist_config_storage() {
 
 trap cleanup_runtime_config EXIT
 
-}
-
 persist_launcher_auto_update_flag() {
   local value="${1:-0}"
   [[ -f "$CONFIG_FILE" ]] || return 0
